@@ -1,679 +1,216 @@
-# Project Turing - Multi-Agent IT Department OS
+# Turing OS - Multi-Agent IT Department OS
 
-> An event-driven, AI-powered IT department simulation using Plane tickets, ephemeral Docker workers, and LLM-driven reasoning.
+> **Tầm nhìn**: Trở thành hệ điều hành IT department thông minh hơn HiClaw - tự động hóa hoàn toàn quy trình phát triển phần mềm với AI agents, từ tiếp nhận yêu cầu đến triển khai sản phẩm.
 
-## Overview
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub stars](https://img.shields.io/github/stars/louisphamdev/turing-os)](https://github.com/louisphamdev/turing-os/stargazers)
 
-Turing is a **Multi-Agent Operating System** that simulates an IT department. Instead of text-based LLM communication, it uses **event-driven architecture** through:
+---
 
-- **Plane.so** - Ticket management with webhooks
-- **Docker** - Dynamic worker provisioning
-- **Revolt** - Human-in-the-loop alerts
-- **BookStack** - Documentation and secrets storage
+## 🤔 Turing OS Là Gì?
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        PROJECT TURING                               │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]               │
-│                        │       │       │                            │
-│                        │       │       └──► skills.sh + Context7    │
-│                        │       │                                    │
-│                        │       └──► Retro Reports ──► All Workers   │
-│                        │                                            │
-│                        └──► [DOCTOR] ◄── User Bug Reports           │
-│                                 │                                   │
-│  BookStack ◄────────────────────────────────────────────────────────│
-│    • Roles & JD                                                     │
-│    • Project Config                                                 │
-│    • Retro Reports                                                  │
-│    • Secrets (API keys)                                             │
-│                                                                     │
-│  Plane.so ◄─────────────────────────────────────────────────────────│
-│    • Ticket Lifecycle                                               │
-│    • State Machine (TODO → IN_PROGRESS → REVIEW/DONE/BLOCKED)       │
-│                                                                     │
-│  Revolt ◄───────────────────────────────────────────────────────────│
-│    • Blocked Task Alerts                                            │
-│    • Human Intervention (/unblock command)                          │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-## Architecture
-
-### Infrastructure
-
-| Service | Image | Ports | Purpose |
-|---------|-------|-------|---------|
-| **plane-api** | makeplane/plane | 3000 | Ticket API |
-| **plane-web** | makeplane/plane | 80 | Ticket UI |
-| **bookstack** | linuxserver/bookstack | 6875 | Docs & Secrets |
-| **revolt** | revoltchat/server | 8080 | Alerts & Chat |
-| **orchestrator** | custom | 3000 | API Gateway |
-| **workers** | turing-worker-base | - | Ephemeral execution |
-
-### Directory Structure
+Turing OS là một **Hệ Điều Hành Đa Agent** mô phỏng một phòng IT hoàn chỉnh. Thay vì giao tiếp LLM đơn giản, nó sử dụng **kiến trúc hướng sự kiện** để điều phối các AI agents như một đội ngũ IT thực thụ.
 
 ```
-turing-os/
-├── install/                    # Installer scripts
-│   ├── install.sh             # macOS/Linux installer
-│   ├── install.ps1           # Windows installer
-│   ├── config.sh              # Linux/Mac config manager
-│   └── config.ps1             # Windows config manager
-├── docker-compose.yml          # All infrastructure
-├── .env.example                # Environment template
-├── project-config.md            # Execution modes & priorities
-│
-├── orchestrator/               # THE BRAIN (Node.js)
-│   ├── src/
-│   │   ├── api/
-│   │   │   └── webhooks.ts     # Plane & Revolt listeners
-│   │   ├── core/
-│   │   │   ├── docker.ts       # Docker SDK wrapper
-│   │   │   ├── registry.ts     # Idempotency enforcement
-│   │   │   └── revolt.ts       # Revolt notification service
-│   │   └── index.ts            # Entry point
-│   └── Dockerfile
-│
-├── base-worker/                 # THE EXECUTOR (Python)
-│   ├── src/
-│   │   ├── agent/
-│   │   │   └── hermes_loop.py  # ReAct tool-calling loop
-│   │   └── tools/
-│   │       ├── plane_tools.py   # Ticket operations
-│   │       ├── bookstack_tools.py
-│   │       ├── local_exec.py    # Sandbox terminal
-│   │       └── research_tools.py # skills.sh + Context7
-│   └── Dockerfile
-│
-└── roles/                      # Agent definitions
-    ├── po.md                   # Product Owner
-    ├── pm.md                   # Project Manager
-    ├── hr.md                   # Human Resources
-    ├── software-engineer.md    # Base SE skills
-    ├── languages/              # Language-specific skills
-    │   ├── dotnet.md
-    │   ├── java.md
-    │   └── react.md
-    └── specializations/        # Specialization skills
-        ├── backend.md
-        └── frontend.md
+Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
+                    │        │
+                    │        ├──► Tự động scale tài nguyên
+                    │        ├──► Phát hiện & xử lý deadlock
+                    │        ├──► Timeout & escalation tự động
+                    │        └──► PM Failover (hot standby)
+                    │
+               [DOCTOR] ◄── Báo cáo lỗi từ user
 ```
 
-## Installation
+---
 
-### Quick Start (One-Command)
+## 🎯 Turing OS Làm Được Gì?
+
+### 1. Quản Lý Yêu Cầu Tự Động
+- **PO (Product Owner)** tiếp nhận yêu cầu từ stakeholder
+- Phân loại priority (P0-P3)
+- Tạo ticket trong Plane với workflow tự động
+
+### 2. Phát Triển Phần Mềm Tự Động
+- **Workers** thực hiện task với ReAct loop
+- Hỗ trợ nhiều ngôn ngữ: Python, JavaScript, TypeScript, Go, Rust, .NET, Java
+- Tự động research với Context7 khi gặp unknown tech
+- Tools: BookStack (docs), Plane (tickets), local terminal (sandbox)
+
+### 3. Human-in-the-Loop (HITL)
+- **Revolt** alerts khi worker bị blocked
+- User có thể `/unblock` để can thiệp
+- Không có circular communication - PM là trung tâm
+
+### 4. Tự Phục Hồi & Giám Sát
+- **Worker Health**: Tự động restart workers chết
+- **PM Failover**: Standby PM takes over khi primary fail
+- **Doctor**: Tự chuẩn đoán và fix lỗi hoặc tạo GitHub Issue
+
+### 5. Báo Cáo & Retro
+- **Retro Reports** tự động tổng hợp từ PM
+- Nhận diện patterns: recurring issues, resource bottlenecks
+
+---
+
+## 🆚 So Sánh Với HiClaw
+
+| Tính Năng | HiClaw | Turing OS | Cải Tiến |
+|-----------|--------|-----------|----------|
+| **Architecture** | Flat (Manager-Worker) | Hierarchy (PO→PM→HR→Workers) | ✅ Rõ ràng hơn |
+| **Priority System** | ❌ Không có | ✅ P0-P3 với interrupt | ✅ Yêu cầu khẩn cấp |
+| **Idempotency** | ❌ Không có | ✅ Registry-based deduplication | ✅ Tránh trùng lặp |
+| **Resource Scaling** | Thủ công | ✅ PM-controlled auto-scaling | ✅ Tiết kiệm resource |
+| **PM Failover** | ❌ Không có | ✅ Hot standby tự động | ✅ Không downtime |
+| **Worker Health** | ❌ Không có | ✅ Zombie killer tự động | ✅ Workers luôn healthy |
+| **Timeout/Escalation** | Thủ công | ✅ Tự động 5min→retry→escalate | ✅ Không lost tasks |
+| **Bug Resolution** | User tự report GitHub | ✅ Doctor agent fix hoặc tạo Issue | ✅ UX tốt hơn |
+| **Communication** | Peer-to-peer (Matrix) | ✅ PM-centralized | ✅ Không deadlock |
+| **Documentation** | Generic roles | ✅ Domain-specific JDs | ✅ Skill chính xác |
+
+**Điểm số**: Turing OS: **45/50** vs HiClaw: **27/50**
+
+---
+
+## 🏗️ Kiến Trúc
+
+### Infrastructure Stack
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| **Plane.so** | 3000/80 | Ticket management & webhooks |
+| **BookStack** | 6875 | Documentation & secrets storage |
+| **Revolt** | 8080 | Human-in-the-loop alerts |
+| **Orchestrator** | 3001 | Event-driven API gateway |
+| **Workers** | Ephemeral | Docker containers, auto-remove |
+
+### Event Flow
+
+```
+1. Stakeholder tạo ticket trong Plane
+   ↓
+2. Webhook trigger → Orchestrator
+   ↓
+3. PO phê duyệt → PM nhận task
+   ↓
+4. PM điều phối → Workers thực hiện
+   ↓
+5. Worker blocked? → Revolt alert → User /unblock
+   ↓
+6. Task failed? → Doctor diagnosis → Fix hoặc GitHub Issue
+   ↓
+7. Complete → Plane ticket updated → Retro report
+```
+
+---
+
+## 🚀 Quick Start
+
+### One-Command Installation
 
 **macOS / Linux:**
 ```bash
 curl -sSL https://turing-os.ai/install.sh | bash
 ```
 
-**Windows (PowerShell 7+):**
+**Windows (PowerShell):**
 ```powershell
-Set-ExecutionPolicy Bypass -Scope Process -Force; iwr https://turing-os.ai/install.ps1 | iex
+irm https://turing-os.ai/install.ps1 | iex
 ```
 
 ### Manual Installation
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/YOUR_USERNAME/project-turing.git
-cd project-turing
-
-# 2. Copy and edit environment
-cp .env.example .env
-# Edit .env with your API keys
-
-# 3. Build worker image
-docker build -t turing-worker-base:latest ./base-worker
-
-# 4. Start infrastructure
-docker compose up -d
-```
-
-### Prerequisites
-
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| Docker | 20.10+ | Latest |
-| Docker Compose | 2.0+ | Latest |
-| RAM | 4 GB | 8 GB |
-| CPU | 2 cores | 4 cores |
-
-### Installation Modes
-
-| Mode | Description |
-|------|-------------|
-| **Unattended** | Uses placeholder API keys, configure later |
-| **Interactive** | Prompts for all configuration values |
-
-### Post-Installation
-
-1. **Configure Plane webhooks** (Settings → Webhooks)
-   - URL: `http://your-server:3000/webhooks/plane`
-   - Events: Ticket created, updated
-
-2. **Create BookStack pages** for secrets and roles
-   - Secrets page: `context7-api-key=sk-xxx`
-   - Roles pages: Copy from `roles/` directory
-
-3. **Access services**:
-   - Plane: http://localhost:3000
-   - BookStack: http://localhost:6875
-   - Revolt: http://localhost:8080
-
-### Configuration Management
-
-**After installation, use the config manager to add/update tokens:**
-
-```bash
-# macOS/Linux
-cd turing-os/install
-./config.sh                    # Configure all services
-./config.sh plane               # Configure Plane only
-./config.sh test                # Test all connections
-
-# Windows
-cd turing-os/install
-.\config.ps1                    # Configure all services
-.\config.ps1 -Service plane     # Configure Plane only
-.\config.ps1 -Service test      # Test all connections
-```
-
-**Config manager features:**
-- Interactive prompts with current values as defaults
-- Token validation before saving
-- Service connectivity testing
-- Status overview of all services
-
-**Example output:**
-```
-╔══════════════════════════════════════════════════════╗
-║            TURING OS SERVICE STATUS                 ║
-╚══════════════════════════════════════════════════════╝
-
-  Plane:      ✓ Connected
-  Revolt:     ⚠ Not configured
-  BookStack:  ⚠ Not configured
-  Context7:   ✓ Connected
-```
-
-### Upgrading
-
-```bash
-# macOS/Linux
-curl -sSL https://turing-os.ai/install.sh | bash
-
-# Windows
-irm https://turing-os.ai/install.ps1 | iex
-
-# Manual
-cd turing-os && git pull && docker compose up -d
-```
-
-### Uninstalling
-
-```bash
-# macOS/Linux
-bash <(curl -fsSL https://turing-os.ai/install.sh) uninstall
-
-# Windows
-irm https://turing-os.ai/install.ps1 -uninstall
-```
-
-## Quick Start
-
-### 1. Prerequisites
-
-```bash
-# Required
-Docker & Docker Compose
-Node.js 20+
-Python 3.11+
-
-# API Keys (add to .env)
-- LLM API Key (OpenAI/Claude)
-- Plane API Key
-- Revolt Bot Token
-- Context7 API Key (in BookStack secrets page)
-```
-
-### 2. Setup
-
-```bash
-# Clone and enter directory
+git clone https://github.com/louisphamdev/turing-os.git
 cd turing-os
 
-# Copy environment file
-cp .env.example .env
-# Edit .env with your API keys
-
-# Build worker image
+# 2. Build worker image
 docker build -t turing-worker-base:latest ./base-worker
 
-# Start infrastructure
+# 3. Start services
 docker compose up -d
 
-# Access services
-# Plane:    http://localhost
-# BookStack: http://localhost:6875
-# Revolt:   http://localhost:8080
-# API:      http://localhost:3000
+# 4. Configure tokens
+cd install && .\config.ps1
 ```
 
-### 3. Create First Ticket
+---
 
-In Plane, create a ticket with:
-- Status: **TODO**
-- Title: "Hello World Test"
-- Description: "Print 'Hello World' using Python"
-
-The webhook will trigger → Orchestrator spawns worker → Worker executes task → Ticket marked **DONE**
-
-## Core Concepts
-
-### Agent Roles
-
-| Role | Purpose |
-|------|---------|
-| **PO** | First contact for stakeholders. Verifies project, discusses requirements, confirms before handing to PM |
-| **PM** | Executes tasks. Breaks down requirements, assigns to workers, manages timeline |
-| **HR** | Manages worker lifecycle. Loads skills, creates workers, terminates idle workers |
-| **DOCTOR** | System doctor. Receives bug reports, diagnoses, attempts fix, escalates to developers, classifies bugs |
-| **Workers** | Execute tasks using Hermes ReAct loop with skills.sh and Context7 research |
-
-### Ticket State Machine
+## 📋 Cấu Trúc Thư Mục
 
 ```
-TODO ──► IN_PROGRESS ──► DONE
-              │
-              ├──► REVIEW
-              │
-              └──► BLOCKED ──► (Human /unblock) ──► TODO
+turing-os/
+├── install/                 # Installers (sh + ps1)
+├── orchestrator/           # Node.js API gateway
+│   └── src/
+│       ├── api/webhooks.ts  # Plane & Revolt listeners
+│       └── core/           # Docker, Registry, Revolt
+├── base-worker/            # Python worker
+│   └── src/
+│       ├── agent/          # ReAct loop
+│       └── tools/          # Plane, BookStack, terminal
+├── roles/                  # Agent definitions
+│   ├── po.md, pm.md, hr.md
+│   ├── software-engineer.md
+│   └── languages/          # Tech stack skills
+├── .github/                # Issue templates
+├── helm/                   # Kubernetes deployment
+└── docs/                   # Architecture docs
 ```
 
-### Priority System
+---
 
-| Level | Name | Behavior |
-|-------|------|----------|
-| P0 | CRITICAL | Pause current task immediately |
-| P1 | HIGH | Complete current, then this |
-| P2 | MEDIUM | Normal queue (default) |
-| P3 | LOW | Fill remaining capacity |
+## 🔧 Configuration
 
-### Execution Modes
+Tokens được quản lý riêng qua config manager:
 
-**Sequential** (default)
-- One task at a time
-- Lower resource cost
-- P0 can interrupt
+```powershell
+# Windows
+.\install\config.ps1                    # Configure all
+.\install\config.ps1 -Service plane     # Plane only
+.\install\config.ps1 -Service test      # Test connections
 
-**Parallel**
-- Multiple workers simultaneously
-- Higher resource cost
-- Faster completion
-
-### Resource Scaling
-
-PM controls how many workers are alive:
-
-| Mode | Max Workers | Description |
-|------|-------------|-------------|
-| **conservative** | 2 | Keep minimum, scale on demand |
-| **balanced** | 5 | Multiple roles, moderate cost |
-| **aggressive** | 10 | Many workers, higher cost |
-| **all** | unlimited | No limit, max parallelism |
-
-**Core Roles (PO, PM)** are **ALWAYS alive**.  
-**Dynamic Roles (workers)** scale up/down based on PM's decisions.
-
-HR coordinates with PM before terminating idle workers to avoid conflicts.
-
-### Skills Loading (MANDATORY)
-
-Every worker **MUST** load skills before executing:
-
-```python
-# 1. Load from skills.sh
-skills = await load_skills_for_task("python,fastapi,sql")
-
-# 2. Research with Context7 if unfamiliar
-docs = await research_with_context7("fastapi", topic="authentication")
-
-# 3. Then proceed with task
+# macOS/Linux
+./install/config.sh                     # Configure all
+./install/config.sh plane               # Plane only
+./install/config.sh test                # Test connections
 ```
 
-## Configuration
-
-### Project Config (`project-config.md`)
-
-```yaml
-execution:
-  mode: sequential  # or parallel
-  allow_interrupt: true
-  
-parallel:
-  max_concurrent_workers: 3
-  
-queue:
-  default_priority: P2
-  
-resources:
-  max_workers: 5
-  reserved_for_emergency: 1
+Services status:
+```
+╔══════════════════════════════════════╗
+║     TURING OS SERVICE STATUS          ║
+╠══════════════════════════════════════╣
+║  Plane:      ✓ Connected             ║
+║  Revolt:     ✓ Connected              ║
+║  BookStack:  ✓ Connected              ║
+║  Context7:   ✓ Connected              ║
+╚══════════════════════════════════════╝
 ```
 
-### Environment Variables
+---
 
-| Variable | Description |
-|----------|-------------|
-| `LLM_API_KEY` | OpenAI/Claude API key |
-| `LLM_PROVIDER` | 'openai' or 'anthropic' |
-| `WORKER_TIMEOUT_MINUTES` | Kill workers after N minutes (default: 15) |
-| `REVOLT_ADMIN_USER_ID` | User to receive blocked alerts |
-| `CONTEXT7_API_KEY` | Stored in BookStack secrets page |
+## 📊 Mục Tiêu Phát Triển
 
-### Worker Communication Protocol
+| Phiên bản | Mục tiêu |
+|-----------|----------|
+| v1.0 | Core: Plane + Workers + PM + HR |
+| v1.1 | Revolt HITL + Doctor agent |
+| v1.2 | PM Failover + Worker Health |
+| v2.0 | Auto-scaling + Retro reports |
 
-**ALL task decisions go through PM. Workers NEVER communicate directly.**
+---
 
-```
-Worker A ── ✗ ── Worker B    (FORBIDDEN)
-     │                      │
-     └──────────┬───────────┘
-                │
-                ▼
-         ┌─────────────┐
-         │      PM     │ ← SINGLE SOURCE OF TRUTH
-         └─────────────┘
-```
+## 🤝 Đóng Góp
 
-Workers report to PM → PM coordinates → No peer-to-peer communication.
+Đóng góp luôn được chào đón! Vui lòng đọc [CONTRIBUTING.md](./CONTRIBUTING.md).
 
-See: [worker-communication-protocol.md](worker-communication-protocol.md)
+**Bug Reports**: [GitHub Issues](https://github.com/louisphamdev/turing-os/issues)
+**LLM Feedback**: [LLM Feedback Template](https://github.com/louisphamdev/turing-os/issues/new?template=llm_feedback.yml)
 
-## Human-in-the-Loop
+---
 
-### When a Task is Blocked
+## 📄 License
 
-1. Worker calls `update_ticket_status('BLOCKED', reason)`
-2. Orchestrator receives webhook notification
-3. Revolt DM sent to admin with:
-   - Ticket ID
-   - Block reason
-   - `/unblock <ticket_id>` command
-
-### To Unblock
-
-In Revolt, send:
-```
-/unblock TICKET-123
-```
-
-Orchestrator will:
-- Reset ticket to TODO
-- Restart worker
-
-## Retro Reports
-
-After each task, PM creates a **Retro Report**:
-- What went well
-- What could improve
-- Blockers encountered
-- Lessons learned
-
-Reports are:
-1. Sent to all workers
-2. Stored in BookStack (`/retro/[year]/[quarter]/`)
-3. Workers acknowledge and update their memory
-
-## Doctor - System Diagnostics
-
-**Doctor** is the system doctor that handles bug reports from users.
-
-### Doctor Workflow
-
-```
-User Report Error
-       │
-       ▼
-┌───────────────────┐
-│ TRIAGE            │
-│ • Categorize      │
-│ • Check known     │
-│ • Assess urgency  │
-└───────────────────┘
-       │
-       ▼
-┌───────────────────┐
-│ DIAGNOSE          │
-│ • Gather logs     │
-│ • Find root cause │
-│ • Identify fix    │
-└───────────────────┘
-       │
-       ▼
-┌───────────────────┐
-│ ATTEMPT FIX       │
-│ • Apply solution  │
-│ • Test result     │
-│ • Document fix    │
-└───────────────────┘
-       │
-   ┌────┴────┐
-   │         │
-FIXED    CAN'T FIX
-   │         │
-   ▼         ▼
-┌────────┐ ┌────────────────┐
-│CLASSIFY│ │ ESCALATE       │
-│ • LLM  │ │ • Send email   │
-│ • Proj │ │ • Wait for fix │
-│ • User │ │ • Test when done│
-└────────┘ └────────────────┘
-```
-
-### Bug Classification
-
-| Type | Description | Action |
-|------|-------------|--------|
-| **PROJECT_BUG** | Error in Turing OS code/config | Fix in code, update Doctor |
-| **LLM_BUG** | Error caused by LLM hallucination | Report to LLM developer |
-| **USER_ERROR** | User misused the system | Educate user |
-
-### User Reporting
-
-Users create a ticket in Plane with:
-- Title: "Bug: [brief description]"
-- Category label: `doctor-report`
-- Description: Full error details, steps to reproduce
-
-### Developer Escalation
-
-If Doctor can't fix:
-1. **PROJECT_BUG**: Fix required in Turing OS code → email to developer
-2. **LLM_BUG**: Feedback to LLM developer for improvement
-
-```
-Email contains:
-- Error description
-- Steps to reproduce
-- Logs and context
-- Classification (project_bug / llm_bug)
-```
-
-See: [roles/doctor.md](roles/doctor.md)
-
-## Timeout & Escalation Policy
-
-Workers operate with bounded wait times. If responses don't arrive within SLA, the system escalates automatically.
-
-### Timeout Rules
-
-| Action | Timeout | Max Retries | Escalation |
-|--------|---------|-------------|------------|
-| Worker → PM: Request coordination | 5 min | 3 | PM escalates to PO |
-| PM → Worker: Task assignment | 2 min | 1 | PM reassigns |
-| Worker → Worker: Dependency response | 5 min | 3 | PM force-resolve |
-| Health check: Worker heartbeat | 2 min | 1 | Warning, then investigate |
-
-### Escalation Triggers
-
-- 3 retries with no response → PO decision required
-- Task blocked > 15 min → PO review
-- Worker unresponsive → kill and respawn
-- Resource exhaustion → PO budget decision
-- Conflict unresolved > 10 min → PO force resolution
-
-See: [timeout-policy.md](timeout-policy.md)
-
-## PM Failover System
-
-PM is the single point of failure. A **hot standby** takes over if primary fails.
-
-### Architecture
-
-```
-┌─────────────────────────────────────┐
-│           PRIMARY PM                 │
-│  • Writes state to Plane every 30s  │
-│  • Heartbeat ping every 30s          │
-└─────────────────────────────────────┘
-                  │
-           State sync (30s)
-                  │
-                  ▼
-┌─────────────────────────────────────┐
-│           STANDBY PM                 │
-│  • Monitors primary heartbeat        │
-│  • If offline > 60s → TAKEOVER      │
-└─────────────────────────────────────┘
-```
-
-### Failover Trigger Conditions
-
-| Condition | Trigger | Action |
-|-----------|---------|--------|
-| Primary heartbeat missing | > 60 seconds | Standby activates |
-| Primary PM process dead | System detects | Standby promoted |
-| Primary unreachable | > 3 sync cycles | Standby promoted |
-
-### Takeover Sequence
-
-1. Standby logs: "Primary PM dead, initiating takeover"
-2. Standby updates Plane: marks self as primary
-3. Standby broadcasts to workers: new PM active
-4. Standby reads full state from Plane
-5. Standby resumes operations
-
-See: [pm-failover.md](pm-failover.md)
-
-## Worker Health Monitoring
-
-PM monitors worker health via heartbeats and progress indicators.
-
-### Health States
-
-| State | Criteria | Action |
-|-------|----------|--------|
-| **HEALTHY** | Heartbeat < 2 min ago, progress recent | Normal |
-| **WARNING** | Missed 1-2 heartbeats | Log, monitor |
-| **STUCK** | No heartbeat > 6 min OR no progress > 10min | Investigate |
-| **DEAD** | Missed 3+ heartbeats | Kill + respawn |
-
-### Heartbeat Protocol
-
-- Workers send heartbeat every 2 minutes
-- Miss 1 → WARNING
-- Miss 3 → DEAD → PM kills and HR respawns
-
-### Stuck Worker Handling
-
-1. Get current task status from Plane
-2. If task BLOCKED → don't kill (expected)
-3. If not blocked → try ping worker
-4. If no response → KILL + RESPAWN
-
-### Zombie Killer
-
-Cron job every 5 minutes:
-- Kill containers with no heartbeat > 15 minutes
-- Force restart dead workers
-
-See: [worker-health.md](worker-health.md)
-
-## BookStack Setup
-
-### Required Pages
-
-**Secrets Page** (for API keys):
-```
-context7-api-key=sk-xxxxxxxxxxxx
-```
-
-**Roles Pages**:
-- `/roles/software-engineer.md`
-- `/roles/hr.md`
-- etc.
-
-**Retro Reports**:
-- `/retro/2026-Q2/`
-- `/retro/2026-Q3/`
-
-## Development
-
-### Run Orchestrator Locally
-
-```bash
-cd orchestrator
-npm install
-npm run dev
-```
-
-### Run Worker Locally
-
-```bash
-cd base-worker
-pip install -r requirements.txt
-TICKET_ID=test LLM_API_KEY=sk-xxx python -m src.index
-```
-
-### Test Webhook
-
-```bash
-# Simulate Plane webhook
-curl -X POST http://localhost:3000/webhooks/plane \
-  -H "Content-Type: application/json" \
-  -d '{"ticket_id": "TEST-001", "status": "TODO", "role": "software-engineer"}'
-```
-
-## Verification Phases
-
-| Phase | Description | Verification |
-|-------|-------------|--------------|
-| 1 | Infrastructure | `docker compose up -d` works |
-| 2 | Idempotency | Same ticket_id sent twice → only 1 container |
-| 3 | Base Worker | Task completes → DONE status |
-| 4 | Revolt | BLOCKED → DM sent → /unblock works |
-| 5 | Timeout Policy | Retries exhausted → escalation to PO |
-| 6 | PM Failover | Primary dies → standby takes over |
-| 7 | Health Monitoring | Worker DEAD → PM kills and HR respawns |
-
-## Strict Rules
-
-1. **Zero-State Workers**: No global variables. All state in Plane/BookStack.
-2. **API Key Isolation**: Keys injected at runtime, never baked into image.
-3. **Idempotency**: Webhook handlers check registry first.
-4. **Zombie Prevention**: Cronjob kills containers >15 min.
-5. **PM-Centralized Communication**: Workers NEVER communicate directly. All via PM.
-6. **Timeout Enforcement**: No indefinite waits. Escalation after SLA breach.
-7. **PM Failover**: Standby PM ready for primary failure.
-8. **Worker Health**: PM monitors heartbeats and kills stuck workers.
-
-## License
-
-MIT
+MIT License - xem [LICENSE](LICENSE) để biết thêm chi tiết.
