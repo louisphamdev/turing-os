@@ -1,0 +1,58 @@
+# Environment files (NEVER commit these)
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Docker
+docker-compose.override.yml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Secrets (never commit these)
+*.pem
+*.key
+secrets/
+credentials/
+
+# Build artifacts
+*.tar
+*.tar.gz
+*.zip
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# OS specific
+.DS_Store
+._*
+Thumbs.db

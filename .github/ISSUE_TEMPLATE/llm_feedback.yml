@@ -1,0 +1,100 @@
+name: 🤖 LLM Feedback
+description: Provide feedback to improve LLM behavior
+title: "[LLM Feedback] "
+labels: ["llm-feedback", "enhancement"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 🤖 LLM Behavior Feedback
+
+        This template is for feedback about LLM behavior, not bugs in the traditional sense.
+        Use this when the LLM made a poor decision, hallucinated, or misunderstood instructions.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Issue Summary
+      description: Brief description of the LLM behavior issue
+      placeholder: "e.g., LLM wrote incorrect Docker command for worker restart"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What Happened
+      description: What did the LLM do or decide?
+      placeholder: |
+        [Describe the LLM's action or decision]
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-should-have-happened
+    attributes:
+      label: What Should Have Happened
+      description: What should the LLM have done instead?
+      placeholder: |
+        [Describe the correct action/decision]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: pattern
+    attributes:
+      label: Pattern
+      description: Is this a one-time issue or recurring pattern?
+      options:
+        - One-time occurrence
+        - Recurring issue
+        - Similar issues with different contexts
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      description: How did this affect the system/user?
+      options:
+        - Critical (Blocked entire workflow)
+        - High (Significant delay or wrong output)
+        - Medium (Minor issue, easily worked around)
+        - Low (Cosmetic/inefficient but functional)
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Conversation Context
+      description: The relevant parts of the LLM conversation
+      placeholder: |
+        [Paste relevant conversation snippets]
+    validations:
+      required: true
+
+  - type: textarea
+    id: suggested-improvement
+    attributes:
+      label: Suggested LLM Improvement
+      description: What should the LLM learn from this?
+      placeholder: |
+        [Your suggestion for how the LLM should improve]
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional Context
+      description: Any other relevant information
+      placeholder: |
+        - Model used:
+        - Temperature setting:
+        - Task type:
+    validations:
+      required: false

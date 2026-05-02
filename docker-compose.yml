@@ -1,0 +1,197 @@
+version: '3.8'
+
+services:
+  # === State (SSoT) - Ticket Management ===
+  plane-db:
+    image: postgres:15-alpine
+    container_name: turing_plane_db
+    environment:
+      - POSTGRES_DB=plane
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - plane_db_data:/var/lib/postgresql/data
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  plane-redis:
+    image: redis:7-alpine
+    container_name: turing_plane_redis
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  plane-api:
+    image: makeplane/plane:latest
+    container_name: turing_plane_api
+    environment:
+      - WEB_URL=http://localhost
+      - SECRET_KEY=plane-secret-key-change-in-production
+      - DATABASE_URL=postgresql://postgres:postgres@plane-db:5432/plane
+      - REDIS_URL=redis://plane-redis:6379
+    volumes:
+      - plane_data:/app/images
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-redis:
+        condition: service_healthy
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  plane-web:
+    image: makeplane/plane:latest
+    container_name: turing_plane_web
+    environment:
+      - WEB_URL=http://localhost
+    depends_on:
+      - plane-api
+    networks:
+      - turing_network
+
+  # === Docs - Specification Storage ===
+  bookstack-db:
+    image: mariadb:10.11
+    container_name: turing_bookstack_db
+    environment:
+      - MYSQL_ROOT_PASSWORD=root_password
+      - MYSQL_DATABASE=bookstack
+      - MYSQL_USER=bookstack
+      - MYSQL_PASSWORD=bookstack_password
+    volumes:
+      - bookstack_db_data:/var/lib/mysql
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  bookstack-app:
+    image: lscr.io/linuxserver/bookstack
+    container_name: turing_bookstack
+    ports:
+      - "6875:8080"
+    volumes:
+      - ./bookstack_data:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - DB_HOST=bookstack-db
+      - DB_USER=bookstack
+      - DB_PASS=bookstack_password
+      - DB_DATABASE=bookstack
+    depends_on:
+      bookstack-db:
+        condition: service_healthy
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # === Comms - Alerts & Human Intervention ===
+  revolt-mongo:
+    image: mongo:6-alpine
+    container_name: turing_revolt_mongo
+    volumes:
+      - revolt_mongo_data:/data/db
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  revolt-redis:
+    image: redis:7-alpine
+    container_name: turing_revolt_redis
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  revolt:
+    image: revoltchat/server:latest
+    container_name: turing_revolt
+    ports:
+      - "8080:8080"
+    volumes:
+      - revolt_data:/data
+    environment:
+      - Database=mongodb://revolt-mongo:27017/revolt
+      - Redis=redis://revolt-redis:6379
+    depends_on:
+      revolt-mongo:
+        condition: service_healthy
+      revolt-redis:
+        condition: service_healthy
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # === Core - Orchestrator (Long-running) ===
+  turing-orchestrator:
+    build:
+      context: ./orchestrator
+      dockerfile: Dockerfile
+    container_name: turing_orchestrator
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - PLANE_API_URL=http://plane-api:3000
+      - REVOLT_API_URL=http://revolt:8080
+      - ORCHESTRATOR_URL=http://turing-orchestrator:3000
+      - BOOKSTACK_URL=http://bookstack:6875
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    env_file:
+      - .env
+    networks:
+      - turing_network
+    depends_on:
+      - plane-api
+      - revolt
+      - bookstack-app
+    restart: unless-stopped
+    restart: unless-stopped
+
+networks:
+  turing_network:
+    driver: bridge
+
+volumes:
+  plane_data:
+  plane_db_data:
+  bookstack_data:
+  bookstack_db_data:
+  revolt_data:
+  revolt_mongo_data:

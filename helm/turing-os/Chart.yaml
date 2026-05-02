@@ -1,0 +1,21 @@
+# Turing OS Helm Chart
+
+apiVersion: v2
+name: turing-os
+description: Multi-Agent IT Department OS
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+keywords:
+  - multi-agent
+  - hermes
+  - plane
+  - automation
+
+maintainers:
+  - name: Turing OS Team
+    email: team@turing-os.ai
+
+# Parent chart (ummy chart for template)
+deprecated: false
