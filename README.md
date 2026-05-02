@@ -1,78 +1,78 @@
 # Turing OS - Multi-Agent IT Department OS
 
-> **Tầm nhìn**: Trở thành hệ điều hành IT department thông minh hơn HiClaw - tự động hóa hoàn toàn quy trình phát triển phần mềm với AI agents, từ tiếp nhận yêu cầu đến triển khai sản phẩm.
+> **Vision**: Become the smartest IT department OS, surpassing HiClaw - fully automating the software development lifecycle with AI agents, from requirements gathering to production deployment.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![GitHub stars](https://img.shields.io/github/stars/louisphamdev/turing-os)](https://github.com/louisphamdev/turing-os/stargazers)
 
 ---
 
-## 🤔 Turing OS Là Gì?
+## 🤔 What is Turing OS?
 
-Turing OS là một **Hệ Điều Hành Đa Agent** mô phỏng một phòng IT hoàn chỉnh. Thay vì giao tiếp LLM đơn giản, nó sử dụng **kiến trúc hướng sự kiện** để điều phối các AI agents như một đội ngũ IT thực thụ.
+Turing OS is a **Multi-Agent Operating System** that simulates a complete IT department. Instead of simple LLM text communication, it uses an **event-driven architecture** to coordinate AI agents as a real IT team.
 
 ```
 Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
                     │        │
-                    │        ├──► Tự động scale tài nguyên
-                    │        ├──► Phát hiện & xử lý deadlock
-                    │        ├──► Timeout & escalation tự động
+                    │        ├──► Auto resource scaling
+                    │        ├──► Deadlock detection & resolution
+                    │        ├──► Automatic timeout & escalation
                     │        └──► PM Failover (hot standby)
                     │
-               [DOCTOR] ◄── Báo cáo lỗi từ user
+               [DOCTOR] ◄── User bug reports
 ```
 
 ---
 
-## 🎯 Turing OS Làm Được Gì?
+## 🎯 What Can Turing OS Do?
 
-### 1. Quản Lý Yêu Cầu Tự Động
-- **PO (Product Owner)** tiếp nhận yêu cầu từ stakeholder
-- Phân loại priority (P0-P3)
-- Tạo ticket trong Plane với workflow tự động
+### 1. Automated Requirements Management
+- **PO (Product Owner)** receives requirements from stakeholders
+- Priority classification (P0-P3)
+- Creates tickets in Plane with automatic workflow
 
-### 2. Phát Triển Phần Mềm Tự Động
-- **Workers** thực hiện task với ReAct loop
-- Hỗ trợ nhiều ngôn ngữ: Python, JavaScript, TypeScript, Go, Rust, .NET, Java
-- Tự động research với Context7 khi gặp unknown tech
-- Tools: BookStack (docs), Plane (tickets), local terminal (sandbox)
+### 2. Automated Software Development
+- **Workers** execute tasks using ReAct loop
+- Multi-language support: Python, JavaScript, TypeScript, Go, Rust, .NET, Java
+- Auto research with Context7 for unknown tech
+- Tools: BookStack (docs), Plane (tickets), sandbox terminal
 
 ### 3. Human-in-the-Loop (HITL)
-- **Revolt** alerts khi worker bị blocked
-- User có thể `/unblock` để can thiệp
-- Không có circular communication - PM là trung tâm
+- **Revolt** alerts when worker gets blocked
+- User can `/unblock` to intervene
+- No circular communication - PM is the hub
 
-### 4. Tự Phục Hồi & Giám Sát
-- **Worker Health**: Tự động restart workers chết
-- **PM Failover**: Standby PM takes over khi primary fail
-- **Doctor**: Tự chuẩn đoán và fix lỗi hoặc tạo GitHub Issue
+### 4. Self-Healing & Monitoring
+- **Worker Health**: Auto restart dead workers
+- **PM Failover**: Standby PM takes over when primary fails
+- **Doctor**: Auto diagnose and fix bugs or create GitHub Issue
 
-### 5. Báo Cáo & Retro
-- **Retro Reports** tự động tổng hợp từ PM
-- Nhận diện patterns: recurring issues, resource bottlenecks
-
----
-
-## 🆚 So Sánh Với HiClaw
-
-| Tính Năng | HiClaw | Turing OS | Cải Tiến |
-|-----------|--------|-----------|----------|
-| **Architecture** | Flat (Manager-Worker) | Hierarchy (PO→PM→HR→Workers) | ✅ Rõ ràng hơn |
-| **Priority System** | ❌ Không có | ✅ P0-P3 với interrupt | ✅ Yêu cầu khẩn cấp |
-| **Idempotency** | ❌ Không có | ✅ Registry-based deduplication | ✅ Tránh trùng lặp |
-| **Resource Scaling** | Thủ công | ✅ PM-controlled auto-scaling | ✅ Tiết kiệm resource |
-| **PM Failover** | ❌ Không có | ✅ Hot standby tự động | ✅ Không downtime |
-| **Worker Health** | ❌ Không có | ✅ Zombie killer tự động | ✅ Workers luôn healthy |
-| **Timeout/Escalation** | Thủ công | ✅ Tự động 5min→retry→escalate | ✅ Không lost tasks |
-| **Bug Resolution** | User tự report GitHub | ✅ Doctor agent fix hoặc tạo Issue | ✅ UX tốt hơn |
-| **Communication** | Peer-to-peer (Matrix) | ✅ PM-centralized | ✅ Không deadlock |
-| **Documentation** | Generic roles | ✅ Domain-specific JDs | ✅ Skill chính xác |
-
-**Điểm số**: Turing OS: **45/50** vs HiClaw: **27/50**
+### 5. Reporting & Retrospectives
+- **Retro Reports** automatically aggregated from PM
+- Pattern recognition: recurring issues, resource bottlenecks
 
 ---
 
-## 🏗️ Kiến Trúc
+## 🆚 Comparison with HiClaw
+
+| Feature | HiClaw | Turing OS | Improvement |
+|---------|--------|-----------|-------------|
+| **Architecture** | Flat (Manager-Worker) | Hierarchy (PO→PM→HR→Workers) | ✅ Clearer separation |
+| **Priority System** | ❌ None | ✅ P0-P3 with interrupt | ✅ Urgent requests handled |
+| **Idempotency** | ❌ None | ✅ Registry-based deduplication | ✅ No duplicates |
+| **Resource Scaling** | Manual | ✅ PM-controlled auto-scaling | ✅ Resource efficient |
+| **PM Failover** | ❌ None | ✅ Hot standby auto-failover | ✅ Zero downtime |
+| **Worker Health** | ❌ None | ✅ Zombie killer auto-restart | ✅ Workers always healthy |
+| **Timeout/Escalation** | Manual | ✅ Auto 5min→retry→escalate | ✅ No lost tasks |
+| **Bug Resolution** | User self-reports to GitHub | ✅ Doctor agent fix or create Issue | ✅ Better UX |
+| **Communication** | Peer-to-peer (Matrix) | ✅ PM-centralized | ✅ No deadlocks |
+| **Documentation** | Generic roles | ✅ Domain-specific JDs | ✅ Accurate skills |
+
+**Score**: Turing OS: **45/50** vs HiClaw: **27/50**
+
+---
+
+## 🏗️ Architecture
 
 ### Infrastructure Stack
 
@@ -87,17 +87,17 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 ### Event Flow
 
 ```
-1. Stakeholder tạo ticket trong Plane
+1. Stakeholder creates ticket in Plane
    ↓
-2. Webhook trigger → Orchestrator
+2. Webhook triggers → Orchestrator
    ↓
-3. PO phê duyệt → PM nhận task
+3. PO approves → PM receives task
    ↓
-4. PM điều phối → Workers thực hiện
+4. PM dispatches → Workers execute
    ↓
 5. Worker blocked? → Revolt alert → User /unblock
    ↓
-6. Task failed? → Doctor diagnosis → Fix hoặc GitHub Issue
+6. Task failed? → Doctor diagnosis → Fix or GitHub Issue
    ↓
 7. Complete → Plane ticket updated → Retro report
 ```
@@ -137,7 +137,7 @@ cd install && .\config.ps1
 
 ---
 
-## 📋 Cấu Trúc Thư Mục
+## 📋 Directory Structure
 
 ```
 turing-os/
@@ -163,7 +163,7 @@ turing-os/
 
 ## 🔧 Configuration
 
-Tokens được quản lý riêng qua config manager:
+Tokens are managed separately via config manager:
 
 ```powershell
 # Windows
@@ -191,10 +191,10 @@ Services status:
 
 ---
 
-## 📊 Mục Tiêu Phát Triển
+## 📊 Roadmap
 
-| Phiên bản | Mục tiêu |
-|-----------|----------|
+| Version | Goals |
+|---------|-------|
 | v1.0 | Core: Plane + Workers + PM + HR |
 | v1.1 | Revolt HITL + Doctor agent |
 | v1.2 | PM Failover + Worker Health |
@@ -202,9 +202,9 @@ Services status:
 
 ---
 
-## 🤝 Đóng Góp
+## 🤝 Contributing
 
-Đóng góp luôn được chào đón! Vui lòng đọc [CONTRIBUTING.md](./CONTRIBUTING.md).
+Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 **Bug Reports**: [GitHub Issues](https://github.com/louisphamdev/turing-os/issues)
 **LLM Feedback**: [LLM Feedback Template](https://github.com/louisphamdev/turing-os/issues/new?template=llm_feedback.yml)
@@ -213,4 +213,4 @@ Services status:
 
 ## 📄 License
 
-MIT License - xem [LICENSE](LICENSE) để biết thêm chi tiết.
+MIT License - see [LICENSE](LICENSE) for details.
