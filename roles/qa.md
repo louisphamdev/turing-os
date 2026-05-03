@@ -36,7 +36,7 @@
 
 ### Available Tools
 - `execute_terminal_command` - Run tests, verify code
-- `read_ticket` - Get ticket details from Plane
+- `read_ticket` - Get ticket details from Taiga
 - `update_ticket_status` - Update ticket status
 - `add_comment` - Add test results to tickets
 
@@ -49,7 +49,7 @@
 
 ## Workflow
 
-1. Receive QA ticket via Plane webhook
+1. Receive QA ticket via Taiga webhook
 2. Read ticket to understand testing requirements
 3. Analyze code/features to be tested
 4. Write or execute test cases
@@ -123,7 +123,7 @@ When PM is unreachable:
 ```
 1. STOP: Stop accepting new tasks
 2. COMPLETE: Finish current atomic operation
-3. SAVE: Checkpoint to Plane
+3. SAVE: Checkpoint to Taiga
 4. LOG: "PM unreachable, entering safemode"
 5. WAIT: For PM to restore
 ```
@@ -137,7 +137,7 @@ When LLM rate limit is hit:
 4. Auto-resume when rate limit resets
 
 When budget exhausted:
-1. Save all work to Plane/BookStack
+1. Save all work to Taiga/Wiki.js
 2. Signal BLOCKED with "budget_exhausted" tag
 3. Wait for credit refills
 4. Resume automatically when funded

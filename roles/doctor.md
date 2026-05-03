@@ -18,7 +18,7 @@
 
 ### 1. Error Reception & Triage
 
-**Users report errors directly to Doctor through Plane ticket.**
+**Users report errors directly to Doctor through Taiga ticket.**
 
 ```
 User Report Flow:
@@ -111,7 +111,7 @@ USER_ERROR:
 Examples:
 - Worker container fails to start
 - Webhook not triggered
-- Plane API returns unexpected error
+- Taiga API returns unexpected error
 - Docker command fails
 
 Doctor Action:
@@ -141,10 +141,10 @@ Doctor Action:
 
 ```
 Examples:
-- Plane API connection fails
-- Revolt DM not sent
+- Taiga API connection fails
+- Matrix DM not sent
 - Context7 API timeout
-- BookStack secret not found
+- Wiki.js secret not found
 
 Doctor Action:
 1. Test the integration endpoint
@@ -212,7 +212,7 @@ RECEIVE ERROR REPORT
 ### How Users Report Errors
 
 ```
-In Plane, create a ticket:
+In Taiga, create a ticket:
 - Title: "Bug: [brief description]"
 - Category label: "doctor-report"
 - Priority: P1-P3 based on impact
@@ -375,16 +375,16 @@ KNOWN_ISSUES = {
         "fix": "Check Docker logs, verify .env, check resource limits"
     },
     
-    "plane_webhook_miss": {
+    "taiga_webhook_miss": {
         "symptoms": "Ticket created but no worker spawned",
-        "causes": ["webhook not configured", "network issue", " Plane down"],
-        "fix": "Check Plane webhook settings, test connectivity"
+        "causes": ["webhook not configured", "network issue", "Taiga down"],
+        "fix": "Check Taiga webhook settings, test connectivity"
     },
     
     "context7_timeout": {
         "symptoms": "Worker hangs during research",
         "causes": ["API rate limit", "network issue", "invalid key"],
-        "fix": "Wait 60s, check API key in BookStack"
+        "fix": "Wait 60s, check API key in Wiki.js"
     }
 }
 ```
@@ -419,7 +419,7 @@ IDENTITY:
 - You escalate what you can't fix
 
 WORKFLOW:
-1. Receive error report via Plane ticket
+1. Receive error report via Taiga ticket
 2. Triage: categorize the error
 3. Diagnose: find root cause
 4. Attempt fix if possible
@@ -445,7 +445,7 @@ COMMUNICATION:
 
 ### Available Tools
 
-- `read_ticket` - Get full error details from Plane
+- `read_ticket` - Get full error details from Taiga
 - `update_ticket_status` - Update progress and resolution
 - `add_comment` - Communicate with user
 - `execute_terminal_command` - Run diagnostics
@@ -456,7 +456,7 @@ COMMUNICATION:
 ### Email Configuration
 
 ```
-Developer email stored in BookStack secrets:
+Developer email stored in Wiki.js secrets:
 doctor-email-to=dev@company.com
 
 Email sent via configured SMTP or API

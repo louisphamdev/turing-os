@@ -1,0 +1,13 @@
+# Crontab for turing-orchestrator container
+
+# Cleanup temp files every 30 minutes
+*/30 * * * * rm -rf /tmp/* 2>/dev/null; rm -rf /app/tmp/* 2>/dev/null; rm -rf /root/.npm/_cacache 2>/dev/null
+
+# Truncate container logs daily
+0 3 * * * find /var/log -name "*.log" -size +10M -exec truncate -s 0 {} \; 2>/dev/null
+
+# Health check every 15 minutes
+*/15 * * * * node /app/src/health-monitor.js --report 2>/dev/null
+
+# Cleanup node_modules cache weekly
+0 4 * * 0 rm -rf /tmp/v8-compile-cache* 2>/dev/null

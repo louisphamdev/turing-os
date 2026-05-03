@@ -189,10 +189,14 @@ When to spawn new worker:
 ### Scale Down Trigger
 
 ```
-When to stop worker:
+When to STOP (not delete) worker:
 1. Worker idle > config.idle_timeout minutes
 2. Queue is empty or low
 3. Current alive > min_required for role
+4. Worker is healthy (not stuck/dead)
+
+Scale down → docker stop (preserve container, can restart later)
+Scale down does NOT → docker rm (that would lose all trained context)
 ```
 
 ---
@@ -242,7 +246,7 @@ def should_terminate_worker(worker_id):
 
 ### Per-Project Config
 
-Stored in BookStack: `/projects/[id]/resource-config.yaml`
+Stored in Wiki.js: `/projects/[id]/resource-config.yaml`
 
 ```yaml
 project:
@@ -273,7 +277,7 @@ scale_down_cooldown: 5  # minutes between scale-down decisions
 ### PM Resource Commands
 
 ```python
-# PM can override via Plane comments or direct command
+# PM can override via Taiga comments or direct command
 PM_COMMANDS:
   /scale-up [role]       # Spawn additional worker
   /scale-down [role]     # Stop idle worker
@@ -390,7 +394,8 @@ For P0/P1 emergencies:
 ### Graceful Shutdown
 
 When scaling down:
-1. PM sends SIGTERM to worker
+1. PM sends SIGTERM to worker via `docker stop`
 2. Worker saves checkpoint
-3. Worker stops within 30 seconds
-4. If stuck, PM kills forcefully
+3. Worker stops within 30 seconds (container preserved, not deleted)
+4. If stuck, PM deletes forcefully (`docker rm -f`)
+5. **Container is STOPPED, not removed** — admin can restart later

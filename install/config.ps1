@@ -1,21 +1,35 @@
-# Turing OS Configuration Manager
-# Usage: .\config.ps1 [-Service all|plane|revolt|bookstack|context7|github]
+﻿# Turing OS Configuration Manager
+# Usage: .\config.ps1 [-Service all|taiga|matrix|wiki|context7|github]
 
 param(
-    [ValidateSet("all", "plane", "revolt", "bookstack", "context7", "github", "test")]
+    [ValidateSet("all", "taiga", "matrix", "wiki", "context7", "github", "test")]
     [string]$Service = "all"
 )
 
-$VERSION = "1.0.0"
-$ENV_FILE = "$PSScriptRoot\.env"
+$VERSION = "2.0.0"
+# Resolve to project root .env (supports both install/ and project root execution)
+$parentEnv = Join-Path $PSScriptRoot "..\.env"
+$localEnv = Join-Path $PSScriptRoot ".env"
+$homeEnv = Join-Path $env:USERPROFILE ".turing-os\turing-os\.env"
+
+if (Test-Path $parentEnv) {
+    $ENV_FILE = (Resolve-Path $parentEnv).Path
+} elseif (Test-Path $localEnv) {
+    $ENV_FILE = (Resolve-Path $localEnv).Path
+} elseif (Test-Path $homeEnv) {
+    $ENV_FILE = $homeEnv
+} else {
+    $ENV_FILE = $parentEnv
+}
 
 # Colors
-$RED = "`e[0;31m"
-$GREEN = "`e[0;32m"
-$YELLOW = "`e[1;33m"
-$BLUE = "`e[0;34m"
-$CYAN = "`e[0;36m"
-$NC = "`e[0m"
+$supportsAnsi = $PSVersionTable.PSVersion.Major -ge 6
+$RED = if ($supportsAnsi) { "`e[0;31m" } else { "" }
+$GREEN = if ($supportsAnsi) { "`e[0;32m" } else { "" }
+$YELLOW = if ($supportsAnsi) { "`e[1;33m" } else { "" }
+$BLUE = if ($supportsAnsi) { "`e[0;34m" } else { "" }
+$CYAN = if ($supportsAnsi) { "`e[0;36m" } else { "" }
+$NC = if ($supportsAnsi) { "`e[0m" } else { "" }
 
 function Log { param([string]$Message); Write-Host "${GREEN}[✓]${NC} $Message" }
 function Warn { param([string]$Message); Write-Host "${YELLOW}[!]${NC} $Message" }
@@ -70,8 +84,8 @@ function Prompt {
         return [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secPw))
     }
     
-    $input = Read-Host
-    return if ([string]::IsNullOrEmpty($input)) { $Default } else { $input }
+    $enteredValue = Read-Host
+    return if ([string]::IsNullOrEmpty($enteredValue)) { $Default } else { $enteredValue }
 }
 
 function Test-ServiceUrl {
@@ -88,15 +102,15 @@ function Test-ServiceUrl {
 # TOKEN VALIDATORS
 # ============================================
 
-function Test-PlaneToken {
+function Test-TaigaToken {
     param([string]$Url, [string]$Token)
     
     try {
-        $headers = @{ "x-api-key" = $Token }
-        $response = Invoke-RestMethod -Uri "$Url/api/v1/workspaces" -Headers $headers -TimeoutSec 10
+        $headers = @{ "Authorization" = "Bearer $Token" }
+        $response = Invoke-RestMethod -Uri "$Url/auth/whoami" -Headers $headers -TimeoutSec 10
         return @{
             Success = $true
-            Message = "Token valid! Found $($response.length) workspaces"
+            Message = "Token valid! User: $($response.username)"
             Data = $response
         }
     } catch {
@@ -108,15 +122,15 @@ function Test-PlaneToken {
     }
 }
 
-function Test-RevoltToken {
+function Test-MatrixToken {
     param([string]$Url, [string]$Token)
     
     try {
-        $headers = @{ "x-bot-token" = $Token }
-        $response = Invoke-RestMethod -Uri "$Url/api/bots/@me" -Headers $headers -TimeoutSec 10
+        $headers = @{ "Authorization" = "Bearer $Token" }
+        $response = Invoke-RestMethod -Uri "$Url/_matrix/client/r0/account/whoami" -Headers $headers -TimeoutSec 10
         return @{
             Success = $true
-            Message = "Bot token valid! Bot: $($response.username)"
+            Message = "Bot token valid!"
             Data = $response
         }
     } catch {
@@ -128,15 +142,13 @@ function Test-RevoltToken {
     }
 }
 
-function Test-BookStackToken {
-    param([string]$Url, [string]$TokenId, [string]$TokenSecret)
+function Test-WikiToken {
+    param([string]$Url, [string]$Token)
     
     try {
-        $credentials = @{
-            email = $TokenId
-            password = $TokenSecret
-        }
-        $response = Invoke-RestMethod -Uri "$Url/api/token" -Method Post -Body $credentials -TimeoutSec 10
+        $headers = @{ "Authorization" = "Bearer $Token" }
+        $body = @{ query = "{ pages { list(limit: 1) { id title } } }" } | ConvertTo-Json
+        $response = Invoke-RestMethod -Uri "$Url/graphql" -Method Post -Headers $headers -Body $body -TimeoutSec 10
         return @{
             Success = $true
             Message = "API token valid!"
@@ -182,14 +194,16 @@ function Show-ServiceStatus {
     Write-Host "${BLUE}╚══════════════════════════════════════════════════════╝${NC}"
     Write-Host ""
     
-    # Plane
-    $planeUrl = $env:PLANE_URL
-    $planeKey = $env:PLANE_API_KEY
-    Write-Host -NoNewline "  Plane: "
-    if ([string]::IsNullOrEmpty($planeKey)) {
-        Write-Host "${YELLOW}⚠ Not configured${NC}"
-    } elseif (Test-ServiceUrl "$planeUrl/api/v1/workspaces") {
-        $test = Test-PlaneToken -Url $planeUrl -Token $planeKey
+    # Taiga
+    $taigaScheme = if ($env:TAIGA_SCHEME) { $env:TAIGA_SCHEME } else { "http" }
+    $taigaDomain = if ($env:TAIGA_DOMAIN) { $env:TAIGA_DOMAIN } else { "localhost:9000" }
+    $taigaUrl = '{0}://{1}/api/v1' -f $taigaScheme, $taigaDomain
+    $taigaKey = $env:TAIGA_API_KEY
+    Write-Host -NoNewline "  Taiga:   "
+    if ([string]::IsNullOrEmpty($taigaKey)) {
+        Write-Host "${YELLOW}⚠ Not configured (auto-setup via .\init-admin-users.ps1)${NC}"
+    } elseif (Test-ServiceUrl "$taigaUrl/") {
+        $test = Test-TaigaToken -Url $taigaUrl -Token $taigaKey
         if ($test.Success) {
             Write-Host "${GREEN}✓ Connected${NC}"
         } else {
@@ -199,26 +213,36 @@ function Show-ServiceStatus {
         Write-Host "${YELLOW}⚠ Service not reachable${NC}"
     }
     
-    # Revolt
-    $revoltUrl = $env:REVOLT_URL
-    $revoltToken = $env:REVOLT_BOT_TOKEN
-    Write-Host -NoNewline "  Revolt: "
-    if ([string]::IsNullOrEmpty($revoltToken)) {
-        Write-Host "${YELLOW}⚠ Not configured${NC}"
-    } elseif (Test-ServiceUrl $revoltUrl) {
-        Write-Host "${GREEN}✓ Connected${NC}"
+    # Matrix/Synapse
+    $synapseUrl = if ($env:SYNAPSE_API_URL) { $env:SYNAPSE_API_URL } else { "http://localhost:8008" }
+    $matrixToken = $env:MATRIX_BOT_TOKEN
+    Write-Host -NoNewline "  Matrix:  "
+    if ([string]::IsNullOrEmpty($matrixToken)) {
+        Write-Host "${YELLOW}⚠ Not configured (auto-setup via .\init-admin-users.ps1)${NC}"
+    } elseif (Test-ServiceUrl $synapseUrl) {
+        $test = Test-MatrixToken -Url $synapseUrl -Token $matrixToken
+        if ($test.Success) {
+            Write-Host "${GREEN}✓ Connected${NC}"
+        } else {
+            Write-Host "${RED}✗ Token invalid${NC}"
+        }
     } else {
         Write-Host "${YELLOW}⚠ Service not reachable${NC}"
     }
     
-    # BookStack
-    $bookstackUrl = $env:BOOKSTACK_URL
-    $bookstackToken = $env:BOOKSTACK_API_TOKEN
-    Write-Host -NoNewline "  BookStack: "
-    if ([string]::IsNullOrEmpty($bookstackToken)) {
+    # Wiki.js
+    $wikiUrl = $env:WIKI_URL
+    $wikiToken = $env:WIKI_JWT_TOKEN
+    Write-Host -NoNewline "  Wiki.js: "
+    if ([string]::IsNullOrEmpty($wikiToken)) {
         Write-Host "${YELLOW}⚠ Not configured${NC}"
-    } elseif (Test-ServiceUrl $bookstackUrl) {
-        Write-Host "${GREEN}✓ Connected${NC}"
+    } elseif (Test-ServiceUrl $wikiUrl) {
+        $test = Test-WikiToken -Url $wikiUrl -Token $wikiToken
+        if ($test.Success) {
+            Write-Host "${GREEN}✓ Connected${NC}"
+        } else {
+            Write-Host "${RED}✗ Token invalid${NC}"
+        }
     } else {
         Write-Host "${YELLOW}⚠ Service not reachable${NC}"
     }
@@ -240,99 +264,58 @@ function Show-ServiceStatus {
     Write-Host ""
 }
 
-function Configure-Plane {
+function Configure-Taiga {
     Write-Host ""
     Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    Write-Host "${YELLOW}┃                     PLANE CONFIG                        ┃${NC}"
+    Write-Host "${YELLOW}┃                     TAIGA CONFIG                       ┃${NC}"
     Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     Write-Host ""
     
-    Info "Get your API key at: $($env:PLANE_URL)/settings/api-tokens"
+    Info "Taiga uses username/password auth (NOT API key)."
+    Info "Run: docker compose up -d && .\init-admin-users.ps1"
+    Info "to auto-create admin user and get auth token."
+    Write-Host ""
+    Info "Manual config not recommended - use the bootstrap script instead."
+}
+
+function Configure-Matrix {
+    Write-Host ""
+    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    Write-Host "${YELLOW}┃                   MATRIX CONFIG                        ┃${NC}"
+    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     Write-Host ""
     
-    $url = Prompt -Label "Plane URL" -Default $env:PLANE_URL
-    $token = Prompt -Label "API Token"
-    $workspaceId = Prompt -Label "Workspace ID" -Default $env:PLANE_WORKSPACE_ID
+    Info "Matrix bot tokens are auto-created by init-admin-users.ps1."
+    Info "Run: docker compose up -d && .\init-admin-users.ps1"
+    Write-Host ""
+    Info "Manual config not recommended - use the bootstrap script instead."
+}
+
+function Configure-Wiki {
+    Write-Host ""
+    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    Write-Host "${YELLOW}┃                  WIKI.JS CONFIG                        ┃${NC}"
+    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    Write-Host ""
+    
+    Info "Get API token at: $($env:WIKI_URL)/admin/settings/api"
+    Write-Host ""
+    
+    $url = Prompt -Label "Wiki.js URL" -Default $env:WIKI_URL
+    $token = Prompt -Label "API Token (JWT)" -Password
     
     if (-not [string]::IsNullOrEmpty($token)) {
         Write-Host ""
         Step "Testing connection..."
-        $test = Test-PlaneToken -Url $url -Token $token
+        $test = Test-WikiToken -Url $url -Token $token
         
         if ($test.Success) {
             Log $test.Message
             Save-Env -Updates @{
-                "PLANE_URL" = $url
-                "PLANE_API_KEY" = $token
-                "PLANE_WORKSPACE_ID" = $workspaceId
+                "WIKI_URL" = $url
+                "WIKI_JWT_TOKEN" = $token
             }
-            Log "Plane configuration saved!"
-        } else {
-            ErrorExit "$($test.Message) - $($test.Error)"
-        }
-    }
-}
-
-function Configure-Revolt {
-    Write-Host ""
-    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    Write-Host "${YELLOW}┃                    REVOLT CONFIG                       ┃${NC}"
-    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    Write-Host ""
-    
-    Info "Get bot token at: $($env:REVOLT_URL)/settings/bots"
-    Write-Host "Create bot at: Settings → User Management → Create Bot"
-    Write-Host ""
-    
-    $url = Prompt -Label "Revolt URL" -Default $env:REVOLT_URL
-    $token = Prompt -Label "Bot Token"
-    $adminId = Prompt -Label "Admin User ID" -Default $env:REVOLT_ADMIN_USER_ID
-    
-    if (-not [string]::IsNullOrEmpty($token)) {
-        Write-Host ""
-        Step "Testing connection..."
-        $test = Test-RevoltToken -Url $url -Token $token
-        
-        if ($test.Success) {
-            Log $test.Message
-            Save-Env -Updates @{
-                "REVOLT_URL" = $url
-                "REVOLT_BOT_TOKEN" = $token
-                "REVOLT_ADMIN_USER_ID" = $adminId
-            }
-            Log "Revolt configuration saved!"
-        } else {
-            ErrorExit "$($test.Message) - $($test.Error)"
-        }
-    }
-}
-
-function Configure-BookStack {
-    Write-Host ""
-    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    Write-Host "${YELLOW}┃                  BOOKSTACK CONFIG                      ┃${NC}"
-    Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    Write-Host ""
-    
-    Info "Get API token at: $($env:BOOKSTACK_URL)/settings/api-tokens"
-    Write-Host ""
-    
-    $url = Prompt -Label "BookStack URL" -Default $env:BOOKSTACK_URL
-    $tokenId = Prompt -Label "API Token ID"
-    $tokenSecret = Prompt -Label "API Token Secret" -Password
-    
-    if (-not [string]::IsNullOrEmpty($tokenId)) {
-        Write-Host ""
-        Step "Testing connection..."
-        $test = Test-BookStackToken -Url $url -TokenId $tokenId -TokenSecret $tokenSecret
-        
-        if ($test.Success) {
-            Log $test.Message
-            Save-Env -Updates @{
-                "BOOKSTACK_URL" = $url
-                "BOOKSTACK_API_TOKEN" = "$tokenId:$tokenSecret"
-            }
-            Log "BookStack configuration saved!"
+            Log "Wiki.js configuration saved!"
         } else {
             ErrorExit "$($test.Message) - $($test.Error)"
         }
@@ -377,30 +360,29 @@ function Test-AllConnections {
     
     $allPassed = $true
     
-    # Plane
-    Write-Host -NoNewline "  Plane: "
-    if (-not [string]::IsNullOrEmpty($env:PLANE_API_KEY)) {
-        $test = Test-PlaneToken -Url $env:PLANE_URL -Token $env:PLANE_API_KEY
+    # Taiga
+    Write-Host -NoNewline "  Taiga: "
+    if (-not [string]::IsNullOrEmpty($env:TAIGA_API_KEY)) {
+        $taigaScheme = if ($env:TAIGA_SCHEME) { $env:TAIGA_SCHEME } else { "http" }
+        $taigaDomain = if ($env:TAIGA_DOMAIN) { $env:TAIGA_DOMAIN } else { "localhost:9000" }
+        $taigaUrl = '{0}://{1}/api/v1' -f $taigaScheme, $taigaDomain
+        $test = Test-TaigaToken -Url $taigaUrl -Token $env:TAIGA_API_KEY
         if ($test.Success) { Write-Host "${GREEN}✓ $($test.Message)${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
     } else { Write-Host "${YELLOW}⚠ Not configured${NC}"; $allPassed = $false }
     
-    # Revolt
-    Write-Host -NoNewline "  Revolt: "
-    if (-not [string]::IsNullOrEmpty($env:REVOLT_BOT_TOKEN)) {
-        $test = Test-RevoltToken -Url $env:REVOLT_URL -Token $env:REVOLT_BOT_TOKEN
-        if ($test.Success) { Write-Host "${GREEN}✓ $($test.Message)${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
+    # Matrix
+    Write-Host -NoNewline "  Matrix: "
+    if (-not [string]::IsNullOrEmpty($env:MATRIX_BOT_TOKEN)) {
+        $synapseUrl = if ($env:SYNAPSE_API_URL) { $env:SYNAPSE_API_URL } else { "http://localhost:8008" }
+        $test = Test-MatrixToken -Url $synapseUrl -Token $env:MATRIX_BOT_TOKEN
+        if ($test.Success) { Write-Host "${GREEN}✓ Bot token valid${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
     } else { Write-Host "${YELLOW}⚠ Not configured${NC}"; $allPassed = $false }
     
-    # BookStack
-    Write-Host -NoNewline "  BookStack: "
-    if (-not [string]::IsNullOrEmpty($env:BOOKSTACK_API_TOKEN)) {
-        $parts = $env:BOOKSTACK_API_TOKEN -split ':'
-        if ($parts.Count -eq 2) {
-            $test = Test-BookStackToken -Url $env:BOOKSTACK_URL -TokenId $parts[0] -TokenSecret $parts[1]
-            if ($test.Success) { Write-Host "${GREEN}✓ $($test.Message)${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
-        } else {
-            Write-Host "${YELLOW}⚠ Invalid token format${NC}"; $allPassed = $false
-        }
+    # Wiki.js
+    Write-Host -NoNewline "  Wiki.js: "
+    if (-not [string]::IsNullOrEmpty($env:WIKI_JWT_TOKEN)) {
+        $test = Test-WikiToken -Url $env:WIKI_URL -Token $env:WIKI_JWT_TOKEN
+        if ($test.Success) { Write-Host "${GREEN}✓ $($test.Message)${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
     } else { Write-Host "${YELLOW}⚠ Not configured${NC}"; $allPassed = $false }
     
     # Context7
@@ -430,16 +412,19 @@ function Show-Help {
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  all       - Configure all services (default)"
-    Write-Host "  plane     - Configure Plane only"
-    Write-Host "  revolt    - Configure Revolt only"
-    Write-Host "  bookstack - Configure BookStack only"
+    Write-Host "  taiga     - View Taiga config info"
+    Write-Host "  matrix    - View Matrix config info"
+    Write-Host "  wiki      - Configure Wiki.js only"
     Write-Host "  context7  - Configure Context7 only"
     Write-Host "  test      - Test all connections"
     Write-Host ""
+    Write-Host "IMPORTANT: Taiga and Matrix auto-setup via:"
+    Write-Host "  docker compose up -d && .\init-admin-users.ps1"
+    Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\config.ps1                    # Configure all"
-    Write-Host "  .\config.ps1 -Service plane     # Configure Plane only"
-    Write-Host "  .\config.ps1 -Service test       # Test connections"
+    Write-Host "  .\config.ps1 -Service wiki      # Configure Wiki.js only"
+    Write-Host "  .\config.ps1 -Service test      # Test connections"
     Write-Host ""
 }
 
@@ -452,14 +437,14 @@ Show-ServiceStatus
 # Run requested action
 switch ($Service.ToLower()) {
     "all" {
-        Configure-Plane
-        Configure-Revolt
-        Configure-BookStack
+        Configure-Taiga
+        Configure-Matrix
+        Configure-Wiki
         Configure-Context7
     }
-    "plane" { Configure-Plane }
-    "revolt" { Configure-Revolt }
-    "bookstack" { Configure-BookStack }
+    "taiga" { Configure-Taiga }
+    "matrix" { Configure-Matrix }
+    "wiki" { Configure-Wiki }
     "context7" { Configure-Context7 }
     "github" { Info "GitHub uses repo URL, no token needed." }
     "test" { Test-AllConnections }

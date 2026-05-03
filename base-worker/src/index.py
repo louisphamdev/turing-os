@@ -2,86 +2,387 @@
 Turing Base Worker - Entry Point
 Ephemeral container that runs a Hermes agent to process a ticket.
 STRICT RULE #1: Zero-State Worker - no persistent state, container dies on exit
+
+Communication Model:
+  Worker → Orchestrator (HTTP /webhooks/worker-message) → Matrix Room → Admin
+  Admin → Matrix Room → Orchestrator (sync listener) → Worker Inbox → Worker (HTTP poll)
 """
 
 import os
 import sys
 import json
+import time as time_module
+import traceback
+import threading
+from queue import Queue
 
-# Entry point - receives TICKET_ID from Orchestrator via environment variable
+# ─── Health Monitoring ────────────────────────────────────────────────────
+from health import start_health_monitor, stop_health_monitor
+import asyncio
+
+# ─── Configuration from Environment ──────────────────────────────────────
 TICKET_ID = os.environ.get('TICKET_ID')
 ROLE = os.environ.get('ROLE', 'default')
 LLM_API_KEY = os.environ.get('LLM_API_KEY')
-LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'openai')  # 'openai' or 'anthropic'
+LLM_PROVIDER = os.environ.get('LLM_PROVIDER', 'openai')
+LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o')
+LLM_BASE_URL = os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
+ORCHESTRATOR_URL = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrator:3001')
+MATRIX_ROOM_ID = os.environ.get('MATRIX_ROOM_ID', '')
 
-if not TICKET_ID:
-    print("[Worker] FATAL: TICKET_ID environment variable is required")
-    sys.exit(1)
 
-if not LLM_API_KEY:
-    print("[Worker] FATAL: LLM_API_KEY environment variable is required")
-    sys.exit(1)
+def log(msg: str, level: str = 'INFO'):
+    """Structured logging"""
+    ts = time_module.strftime('%Y-%m-%d %H:%M:%S')
+    print(f"[{ts}] [{level}] [Worker:{TICKET_ID}] {msg}", flush=True)
 
-print(f"[Worker] Starting for ticket: {TICKET_ID}, role: {ROLE}, provider: {LLM_PROVIDER}")
+
+def notify_orchestrator(endpoint: str, data: dict):
+    """Send notification to orchestrator (best-effort)"""
+    try:
+        import requests
+        requests.post(
+            f'{ORCHESTRATOR_URL}/webhooks/{endpoint}',
+            json=data,
+            timeout=5,
+        )
+    except Exception as e:
+        log(f"Failed to notify orchestrator ({endpoint}): {e}", 'WARN')
+
 
 def create_agent():
     """Factory function to create the appropriate agent based on LLM_PROVIDER"""
-    from agent.hermes_loop import HermesAgent, OpenAIAgent, AnthropicAgent
-    
-    # Create base agent with tools
+    from agent.hermes_loop import OpenAIAgent, AnthropicAgent, MiniMaxAgent
+
+    kwargs = {
+        'ticket_id': TICKET_ID,
+        'role': ROLE,
+        'api_key': LLM_API_KEY,
+        'model': LLM_MODEL,
+        'base_url': LLM_BASE_URL,
+    }
+
     if LLM_PROVIDER == 'anthropic':
-        agent = AnthropicAgent(ticket_id=TICKET_ID, role=ROLE, api_key=LLM_API_KEY)
+        agent = AnthropicAgent(**kwargs)
+    elif LLM_PROVIDER == 'minimax':
+        agent = MiniMaxAgent(**kwargs)
     else:
-        # Default to OpenAI
-        agent = OpenAIAgent(ticket_id=TICKET_ID, role=ROLE, api_key=LLM_API_KEY)
-    
+        agent = OpenAIAgent(**kwargs)
+
+    # ─── Load skills from skills.sh on startup ────────────────────────────
+    _load_startup_skills(agent, ROLE)
+
     return agent
+
+
+def _load_startup_skills(agent, role: str):
+    """
+    Load default skills from skills.sh based on role.
+    Called during worker startup.
+    """
+    # Default skills mapping by role
+    role_skills = {
+        'software-engineer': 'python,javascript,git,docker,sql',
+        'po': 'product-management,agile,jira',
+        'pm': 'project-management,scrum,asana',
+        'hr': 'recruiting,onboarding,hr-software',
+        'qa': 'testing,selenium,jest,cypress',
+        'devops': 'docker,kubernetes,terraform,ci-cd',
+        'ba': 'data-analysis,sql,excel',
+        'data': 'python,sql,pandas,jupyter',
+        'security': 'security-audit,owasp,pen-testing',
+        'network': 'networking,dns,tcp-ip',
+        'doctor': 'medical-knowledge,diagnostics',
+    }
+
+    skills_to_load = role_skills.get(role.lower())
+    if not skills_to_load:
+        skills_to_load = 'python,javascript,git'
+
+    log(f"[Startup] Loading skills for role '{role}': {skills_to_load}")
+
+    try:
+        from tools.research_tools import load_skills_for_task_sync
+        result = load_skills_for_task_sync(skills_to_load)
+        loaded = result.get('loaded', 0)
+        total = result.get('total', 0)
+        log(f"[Startup] ✓ Loaded {loaded}/{total} skills for role '{role}'")
+    except Exception as e:
+        log(f"[Startup] ⚠ Failed to load skills: {e}", 'WARN')
+
+
+# ─── Orchestrator-Based Admin Communication ────────────────────────────────
+
+def poll_admin_inbox() -> list:
+    """Poll orchestrator for pending admin messages"""
+    try:
+        import requests
+        resp = requests.get(
+            f'{ORCHESTRATOR_URL}/webhooks/worker-inbox/{TICKET_ID}',
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            return resp.json().get('messages', [])
+        return []
+    except Exception:
+        return []
+
+
+def send_to_admin(message: str, message_type: str = 'info'):
+    """Send message to admin via orchestrator → Matrix"""
+    try:
+        import requests
+        requests.post(
+            f'{ORCHESTRATOR_URL}/webhooks/worker-message',
+            json={
+                'ticket_id': TICKET_ID,
+                'message': message,
+                'message_type': message_type,
+            },
+            timeout=5,
+        )
+    except Exception as e:
+        log(f"Failed to send message to admin: {e}", 'WARN')
+        # Fallback: send directly via Matrix
+        _send_matrix_direct(message)
+
+
+def _send_matrix_direct(message: str):
+    """Fallback: send directly to Matrix room"""
+    if not MATRIX_ROOM_ID:
+        return
+    try:
+        from tools.matrix_tools import MatrixClient
+        api_url = os.environ.get('SYNAPSE_API_URL', 'http://synapse:8008')
+        token = os.environ.get('MATRIX_BOT_TOKEN', '')
+        if token:
+            client = MatrixClient(api_url, token)
+            client.join_room(MATRIX_ROOM_ID)
+            client.send_message(MATRIX_ROOM_ID, message)
+    except Exception:
+        pass
+
+
+def _heartbeat_loop():
+    """
+    Background thread: sends periodic heartbeats to the orchestrator every 2 minutes.
+    Reports worker status (idle/working), current task, CPU%, memory MB.
+    """
+    import requests
+    import psutil
+
+    HEARTBEAT_INTERVAL = 120  # seconds
+
+    while True:
+        try:
+            try:
+                cpu_percent = psutil.cpu_percent(interval=1)
+                mem = psutil.virtual_memory()
+                mem_mb = mem.used / 1024 / 1024
+            except Exception:
+                cpu_percent = None
+                mem_mb = None
+
+            payload = {
+                'ticket_id': TICKET_ID,
+                'status': 'working',
+                'timestamp': time_module.strftime('%Y-%m-%dT%H:%M:%SZ'),
+            }
+            if cpu_percent is not None:
+                payload['cpu_percent'] = round(cpu_percent, 1)
+            if mem_mb is not None:
+                payload['memory_mb'] = round(mem_mb, 1)
+
+            requests.post(
+                f'{ORCHESTRATOR_URL}/webhooks/heartbeat',
+                json=payload,
+                timeout=5,
+            )
+            log(f"[Heartbeat] sent — CPU:{cpu_percent}% RAM:{mem_mb:.0f}MB" if cpu_percent else "[Heartbeat] sent", 'DEBUG')
+        except Exception as e:
+            log(f"[Heartbeat] failed: {e}", 'WARN')
+
+        time_module.sleep(HEARTBEAT_INTERVAL)
+
 
 def main():
     """Main entry point"""
+    log(f"Starting — role: {ROLE}, provider: {LLM_PROVIDER}, model: {LLM_MODEL}")
+
+    # ── Validate required env vars ────────────────────────────────────────
+    if not TICKET_ID:
+        log("FATAL: TICKET_ID environment variable is required", 'ERROR')
+        sys.exit(1)
+
+    if not LLM_API_KEY:
+        log("FATAL: LLM_API_KEY environment variable is required", 'ERROR')
+        sys.exit(1)
+
+    # ── Start heartbeat thread ───────────────────────────────────────────
+    heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+    heartbeat_thread.start()
+    log("[Heartbeat] Background thread started (every 120s)")
+
     try:
-        # Create agent with LLM integration
+        # ── Create agent ──────────────────────────────────────────────────
         agent = create_agent()
-        
-        # Get task details from ticket
-        print("[Worker] Reading ticket information...")
-        from tools import plane_tools
-        ticket = plane_tools.read_ticket(TICKET_ID)
-        
+
+        # ── Read ticket from Taiga ────────────────────────────────────────
+        log("Reading ticket information...")
+        from tools import taiga_tools
+        ticket = taiga_tools.read_ticket(TICKET_ID)
+
         task_description = ticket.get('description', '') or ticket.get('title', 'No task description')
-        print(f"[Worker] Task: {task_description[:200]}...")
-        
-        # Run the agent
+        log(f"Task: {task_description[:200]}...")
+
+        # ── Update ticket to IN_PROGRESS ──────────────────────────────────
+        taiga_tools.update_ticket_status(TICKET_ID, 'IN_PROGRESS', 'Worker started processing')
+
+        # ── Start health monitoring ────────────────────────────────────────
+        health = start_health_monitor(TICKET_ID, ROLE)
+        health.set_status('working')
+        health.set_current_task(task_description[:100])
+
+        # ── Run the agent ─────────────────────────────────────────────────
+        start_time = time_module.time()
         result = agent.run(initial_task=task_description)
-        
-        print(f"[Worker] Agent finished with result: {result}")
-        
-        # Update ticket status based on result
+        elapsed = time_module.time() - start_time
+
+        log(f"Agent finished: result={result}, elapsed={elapsed:.1f}s")
+
+        # ── Handle result ─────────────────────────────────────────────────
         if result == 'done':
-            print(f"[Worker] Task completed successfully")
-            # Status already updated by agent via update_ticket_status tool
+            log("✓ Task completed successfully")
+            notify_orchestrator('completed', {
+                'ticket_id': TICKET_ID,
+                'summary': f'Task completed in {elapsed:.0f}s',
+            })
+
         elif result == 'blocked':
-            print(f"[Worker] Task is blocked, waiting for human intervention")
-            plane_tools.update_ticket_status(TICKET_ID, 'BLOCKED', 'Task blocked - awaiting human intervention')
+            log("✗ Task is blocked, waiting for human intervention")
+            taiga_tools.update_ticket_status(
+                TICKET_ID, 'BLOCKED',
+                'Task blocked — awaiting human intervention'
+            )
+            notify_orchestrator('blocked', {
+                'ticket_id': TICKET_ID,
+                'reason': 'Agent reported blocked state',
+            })
+
+        elif result == 'max_iterations':
+            log("⚠ Max iterations reached without completion", 'WARN')
+            taiga_tools.update_ticket_status(
+                TICKET_ID, 'BLOCKED',
+                f'Max iterations ({agent.max_iterations}) reached. Task may need human review.'
+            )
+            notify_orchestrator('blocked', {
+                'ticket_id': TICKET_ID,
+                'reason': f'Max iterations reached ({agent.max_iterations})',
+            })
+
         else:
-            print(f"[Worker] Task did not complete normally: {result}")
-            
-        print(f"[Worker] Exiting for ticket {TICKET_ID}")
+            log(f"Unknown result: {result}", 'WARN')
+
+        # ── Interactive Mode — Bidirectional Admin Communication ───────────
+        # After initial task, enter interactive mode to handle admin messages.
+        # Uses orchestrator inbox polling (admin → Matrix room → orchestrator → inbox)
+        # and orchestrator relay (worker → orchestrator → Matrix room → admin).
+        if MATRIX_ROOM_ID:
+            log("[Interactive] Entering bidirectional mode via orchestrator relay...")
+            send_to_admin(f"👋 Hello! I'm the **{ROLE}** worker. Task finished ({result}). How can I help you?")
+
+            # System prompt for interactive chat
+            chat_system = f"""You are a helpful AI assistant for the {ROLE} role.
+You are chatting with a user (admin) via Matrix. Be conversational and helpful.
+When the user asks you to do something, use tools to accomplish the task.
+Always respond in a friendly manner.
+You have access to Taiga (tickets), Wiki.js (documentation), and terminal commands."""
+
+            # Interactive loop: poll inbox → process → reply
+            while True:
+                admin_messages = poll_admin_inbox()
+                for msg in admin_messages:
+                    sender = msg.get('sender', 'admin')
+                    content = msg.get('content', '')
+                    is_command = msg.get('isStructuredCommand', False)
+                    command_type = msg.get('commandType', '')
+                    command_args = msg.get('commandArgs', {})
+
+                    if not content.strip():
+                        continue
+
+                    log(f"[Interactive] {sender}: {content[:100]}...")
+
+                    # ── Handle Structured Commands ────────────────────────────────
+                    if is_command and command_type:
+                        log(f"[Command] Executing: {command_type} with args={command_args}")
+                        try:
+                            from agent.command_executor import execute_worker_command
+                            cmd_result = execute_worker_command(
+                                agent=agent,
+                                command_type=command_type,
+                                command_args=command_args,
+                                sender=sender,
+                            )
+                            send_to_admin(cmd_result)
+                        except Exception as e:
+                            log(f"[Command] Error: {e}")
+                            send_to_admin(f"❌ Command execution failed: {str(e)[:200]}")
+                        continue
+
+                    # ── Regular Chat Message ─────────────────────────────────────
+                    try:
+                        # Create fresh agent for each message, respecting LLM_PROVIDER
+                        chat_agent = create_agent()
+                        chat_agent.system_prompt_override = chat_system
+
+                        # Run interactive — get the response
+                        result, response_content = chat_agent.run_interactive(content)
+
+                        # Send reply back through orchestrator → Matrix
+                        if response_content:
+                            # Split long messages
+                            if len(response_content) > 2000:
+                                for i in range(0, len(response_content), 2000):
+                                    send_to_admin(response_content[i:i+2000])
+                            else:
+                                send_to_admin(response_content)
+                        else:
+                            send_to_admin("✅ Done! Anything else?")
+
+                    except Exception as e:
+                        log(f"[Interactive] Error: {e}")
+                        try:
+                            send_to_admin(f"❌ Error: {str(e)[:200]}")
+                        except Exception:
+                            pass
+
+                time_module.sleep(3)  # Poll every 3s
+
+        log(f"Exiting (ticket: {TICKET_ID})")
+        stop_health_monitor()
         sys.exit(0)
-        
+
     except Exception as e:
-        print(f"[Worker] FATAL ERROR: {e}")
-        import traceback
+        log(f"FATAL ERROR: {e}", 'ERROR')
         traceback.print_exc()
-        
+
         # Try to mark ticket as blocked
         try:
-            from tools import plane_tools
-            plane_tools.update_ticket_status(TICKET_ID, 'BLOCKED', f'Worker error: {str(e)}')
-        except:
+            from tools import taiga_tools
+            taiga_tools.update_ticket_status(
+                TICKET_ID, 'BLOCKED',
+                f'Worker error: {str(e)[:500]}'
+            )
+            notify_orchestrator('blocked', {
+                'ticket_id': TICKET_ID,
+                'reason': f'Worker crash: {str(e)[:200]}',
+            })
+        except Exception:
             pass
-            
+
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()

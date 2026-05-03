@@ -1,0 +1,240 @@
+# Turing OS - Simple All-in-One Docker Compose
+# Single image deployment for easy setup
+
+version: '3.8'
+
+services:
+  # === State (SSoT) - Ticket Management (Taiga) ===
+  taiga-db:
+    image: postgres:12.3
+    container_name: turing_taiga_db
+    environment:
+      - POSTGRES_DB=taiga
+      - POSTGRES_USER=taiga
+      - POSTGRES_PASSWORD=taiga_password
+    volumes:
+      - taiga_db_data:/var/lib/postgresql/data
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taiga"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  taiga-events-rabbitmq:
+    image: rabbitmq:3.8-management-alpine
+    container_name: turing_taiga_events_rabbitmq
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=secret-erlang-cookie
+      - RABBITMQ_DEFAULT_USER=taiga
+      - RABBITMQ_DEFAULT_PASS=taiga_password
+      - RABBITMQ_DEFAULT_VHOST=taiga
+    volumes:
+      - taiga_events_rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - turing_network
+
+  taiga-async-rabbitmq:
+    image: rabbitmq:3.8-management-alpine
+    container_name: turing_taiga_async_rabbitmq
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=secret-erlang-cookie
+      - RABBITMQ_DEFAULT_USER=taiga
+      - RABBITMQ_DEFAULT_PASS=taiga_password
+      - RABBITMQ_DEFAULT_VHOST=taiga
+    volumes:
+      - taiga_async_rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - turing_network
+
+  taiga-back:
+    image: taigaio/taiga-back:latest
+    container_name: turing_taiga_back
+    env_file:
+      - ./taiga.env
+    environment:
+      - POSTGRES_DB=taiga
+      - POSTGRES_USER=taiga
+      - POSTGRES_PASSWORD=taiga_password
+      - POSTGRES_HOST=taiga-db
+      - TAIGA_SECRET_KEY=taiga-secret-key-change-in-production
+      - TAIGA_SITES_SCHEME=http
+      - TAIGA_SITES_DOMAIN=localhost:9000
+    volumes:
+      - taiga_static_data:/taiga-back/static
+      - taiga_media_data:/taiga-back/media
+    networks:
+      - turing_network
+    depends_on:
+      taiga-db:
+        condition: service_healthy
+      taiga-events-rabbitmq:
+        condition: service_started
+      taiga-async-rabbitmq:
+        condition: service_started
+
+  taiga-async:
+    image: taigaio/taiga-back:latest
+    container_name: turing_taiga_async
+    entrypoint: ["/taiga-back/docker/async_entrypoint.sh"]
+    environment:
+      - POSTGRES_DB=taiga
+      - POSTGRES_USER=taiga
+      - POSTGRES_PASSWORD=taiga_password
+      - POSTGRES_HOST=taiga-db
+      - TAIGA_SECRET_KEY=taiga-secret-key-change-in-production
+      - TAIGA_SITES_SCHEME=http
+      - TAIGA_SITES_DOMAIN=localhost:9000
+      - RABBITMQ_USER=taiga
+      - RABBITMQ_PASS=taiga_password
+      - RABBITMQ_VHOST=taiga
+    volumes:
+      - taiga_static_data:/taiga-back/static
+      - taiga_media_data:/taiga-back/media
+    networks:
+      - turing_network
+    depends_on:
+      taiga-db:
+        condition: service_healthy
+      taiga-events-rabbitmq:
+        condition: service_started
+      taiga-async-rabbitmq:
+        condition: service_started
+
+  taiga-front:
+    image: taigaio/taiga-front:latest
+    container_name: turing_taiga_front
+    environment:
+      - TAIGA_URL=http://localhost:9000
+      - TAIGA_WEBSOCKETS_URL=ws://localhost:9000
+    networks:
+      - turing_network
+
+  taiga-events:
+    image: taigaio/taiga-events:latest
+    container_name: turing_taiga_events
+    environment:
+      - RABBITMQ_USER=taiga
+      - RABBITMQ_PASS=taiga_password
+      - TAIGA_SECRET_KEY=taiga-secret-key-change-in-production
+    networks:
+      - turing_network
+    depends_on:
+      - taiga-events-rabbitmq
+
+  taiga-protected:
+    image: taigaio/taiga-protected:latest
+    container_name: turing_taiga_protected
+    environment:
+      - MAX_AGE=86400
+      - SECRET_KEY=taiga-secret-key-change-in-production
+    networks:
+      - turing_network
+
+  taiga-gateway:
+    image: nginx:1.19-alpine
+    container_name: turing_taiga_gateway
+    ports:
+      - "9000:80"
+    volumes:
+      - ./taiga-gateway/taiga.conf:/etc/nginx/conf.d/default.conf
+      - taiga_static_data:/taiga/static
+      - taiga_media_data:/taiga/media
+    networks:
+      - turing_network
+    depends_on:
+      - taiga-front
+      - taiga-back
+      - taiga-events
+
+  # === Docs - Specification Storage (Wiki.js) ===
+  wiki:
+    image: requarks/wiki:latest
+    container_name: turing_wiki
+    ports:
+      - "6875:3000"
+    volumes:
+      - ./wiki_data:/data
+    environment:
+      - DB_TYPE=sqlite
+      - APP_URL=http://localhost:6875
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # === Matrix/Synapse - Human-in-the-Loop ===
+  synapse:
+    image: matrixdotorg/synapse:latest
+    container_name: turing_synapse
+    ports:
+      - "8008:8008"
+      - "8448:8448"
+    volumes:
+      - ./synapse:/data
+    environment:
+      - SYNAPSE_SERVER_NAME=localhost
+      - SYNAPSE_REGISTRATION_SECRET=f643143e19d68d088741f6ca465894bb6964ca284b5d2c58a8dcc3348750f4e4
+      - SYNAPSE_REPORT_STATS=no
+      - SYNAPSE_ENABLE_REGISTRATION=true
+      - SYNAPSE_ALLOW_GUEST_ACCESS=true
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  element:
+    image: vectorim/element-web:v1.11.34
+    container_name: turing_element
+    ports:
+      - "8080:80"
+    environment:
+      - SERVER_NAME=localhost
+      - ROOT_URL=http://localhost:8008
+    depends_on:
+      - synapse
+    networks:
+      - turing_network
+    restart: unless-stopped
+
+  # === Turing OS - All-in-One (Orchestrator + Worker) ===
+  turing-os:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: turing_os
+    ports:
+      - "3001:3001"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TAIGA_API_URL=http://taiga-gateway:9000/api/v1
+      - WIKI_URL=http://wiki:3000
+      - SYNAPSE_API_URL=http://synapse:8008
+    depends_on:
+      - taiga-gateway
+      - wiki
+      - synapse
+    networks:
+      - turing_network
+
+networks:
+  turing_network:
+    driver: bridge
+
+volumes:
+  taiga_db_data:
+  taiga_static_data:
+  taiga_media_data:
+  taiga_events_rabbitmq_data:
+  taiga_async_rabbitmq_data:
+  wiki_data:

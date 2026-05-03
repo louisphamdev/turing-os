@@ -1,0 +1,40 @@
+# Configuration file for Synapse.
+#
+# This is a YAML file: see [1] for a quick introduction. Note in particular
+# that *indentation is important*: all the elements of a list or dictionary
+# should have the same indentation.
+#
+# [1] https://docs.ansible.com/ansible/latest/reference_appendices/YAMLSyntax.html
+#
+# For more information on how to configure Synapse, including a complete accounting of
+# each option, go to docs/usage/configuration/config_documentation.md or
+# https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html
+server_name: "localhost"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    resources:
+    - compress: false
+      names:
+      - client
+      - federation
+    tls: false
+    type: http
+    x_forwarded: true
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+log_config: "/data/localhost.log.config"
+media_store_path: /data/media_store
+registration_shared_secret: "IL+TIxnDlZ5luaR::1i^cx*HBX,Mu10m9+iI4,U5EC1Xr:3B5x"
+report_stats: false
+macaroon_secret_key: "URQ2^5f3A=7AeOjMM+otPhY_NdJH;2ti73ysY@.rH1S3b*Ngr-"
+form_secret: "zjJG6#FZ5yNs@AQS53T6wfJ=,4dUo#@6ds5asr6Kw5IafGW:nG"
+signing_key_path: "/data/localhost.signing.key"
+trusted_key_servers:
+  - server_name: "matrix.org"
+
+
+enable_registration: true
+enable_registration_without_verification: true

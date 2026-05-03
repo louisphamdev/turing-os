@@ -1,4 +1,4 @@
-.PHONY: help build up down logs ps restart clean test quickstart status
+.PHONY: help install bootstrap build up down logs ps restart clean doctor test test-quick quickstart status update uninstall replay
 
 # Turing OS Makefile
 # Usage: make [target]
@@ -21,29 +21,31 @@ help:
 	@echo ""
 	@echo -e "$(YELLOW)Usage:$(NC) make [target]"
 	@echo ""
-	@echo -e "$(GREEN)Installation:${NC)"
+	@echo -e "$(GREEN)Installation:$(NC)"
 	@echo "  install         Run the interactive installer"
+	@echo "  bootstrap       Create Taiga + Matrix users/tokens"
 	@echo "  build           Build Docker images"
 	@echo "  up              Start all services"
 	@echo ""
-	@echo -e "$(GREEN)Operations:${NC)"
+	@echo -e "$(GREEN)Operations:$(NC)"
 	@echo "  down            Stop all services"
 	@echo "  restart         Restart all services"
 	@echo "  logs            View logs (Ctrl+C to exit)"
 	@echo "  ps              Show running containers"
 	@echo "  status          Show service status"
+	@echo "  doctor          Run post-install connection checks"
 	@echo ""
-	@echo -e "$(GREEN)Development:${NC}"
-	@echo "  test            Run test suite"
+	@echo -e "$(GREEN)Development:$(NC)"
+	@echo "  test            Run Docker smoke checks"
 	@echo "  test-quick      Quick smoke test"
 	@echo "  clean           Remove containers, volumes, images"
 	@echo ""
-	@echo -e "$(GREEN)Utilities:${NC}"
+	@echo -e "$(GREEN)Utilities:$(NC)"
 	@echo "  quickstart      Show quick start guide"
 	@echo "  update          Pull latest changes"
 	@echo "  uninstall       Remove Turing OS"
 	@echo ""
-	@echo -e "$(YELLOW)Examples:${NC}"
+	@echo -e "$(YELLOW)Examples:$(NC)"
 	@echo "  make up              # Start services"
 	@echo "  make logs            # View logs"
 	@echo "  make restart         # Restart everything"
@@ -52,12 +54,18 @@ help:
 
 ## install - Run interactive installer
 install:
-	@if [ "$(shell uname)" = "Darwin" ] || [ "$(shell uname -s)" = "Linux" ]; then \
-		bash <(curl -sSL https://turing-os.ai/install.sh); \
-	elif [ "$(shell uname -s)" = "Windows_NT" ]; then \
-		powershell -ExecutionPolicy Bypass -Command "iwr https://turing-os.ai/install.ps1 | iex"; \
+	@if [ "$(OS)" = "Windows_NT" ]; then \
+		powershell -ExecutionPolicy Bypass -File .\install\install.ps1; \
 	else \
-		echo "Unknown OS. Please install manually."; \
+		bash ./install/install.sh; \
+	fi
+
+## bootstrap - Create Taiga + Matrix users/tokens
+bootstrap:
+	@if [ "$(OS)" = "Windows_NT" ]; then \
+		powershell -ExecutionPolicy Bypass -File .\init-admin-users.ps1; \
+	else \
+		bash ./init-admin-users.sh; \
 	fi
 
 ## build - Build Docker images
@@ -101,11 +109,20 @@ status:
 	@echo ""
 	@docker compose ps
 	@echo ""
-	@echo -e "$(YELLOW)Access URLs:${NC}"
-	@echo "  Plane:      http://localhost:3000"
-	@echo "  BookStack:  http://localhost:6875"
-	@echo "  Revolt:     http://localhost:8080"
-	@echo "  Orchestra:  http://localhost:3001"
+	@echo -e "$(YELLOW)Access URLs:$(NC)"
+	@echo "  Taiga:      http://localhost:9000"
+	@echo "  Wiki.js:    http://localhost:6875"
+	@echo "  Matrix:     http://localhost:8008"
+	@echo "  Element:    http://localhost:8080"
+	@echo "  Orchestrator: http://localhost:3001/health"
+
+## doctor - Run post-install connection checks
+doctor:
+	@if [ "$(OS)" = "Windows_NT" ]; then \
+		powershell -ExecutionPolicy Bypass -File .\install\config.ps1 -Service test; \
+	else \
+		bash ./install/config.sh test; \
+	fi
 
 ## clean - Remove containers and volumes
 clean:
@@ -121,9 +138,9 @@ clean:
 
 ## test - Run all tests
 test:
-	@echo -e "$(GREEN)[TEST] Running test suite...$(NC)"
-	docker compose -f docker-compose.test.yml up --abort-on-container-exit
-	@echo -e "$(GREEN)[TEST] Tests complete!$(NC)"
+	@echo -e "$(GREEN)[TEST] Running Docker smoke checks...$(NC)"
+	@bash ./scripts/smoke-test.sh
+	@echo -e "$(GREEN)[TEST] Smoke checks complete!$(NC)"
 
 ## test-quick - Quick smoke test
 test-quick:
@@ -137,22 +154,23 @@ quickstart:
 	@echo -e "$(BLUE)║           Turing OS Quick Start Guide                ║$(NC)"
 	@echo -e "$(BLUE)╚══════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo -e "$(YELLOW)1. Create your first ticket in Plane:${NC}"
-	@echo "   - Go to http://localhost:3000"
+	@echo -e "$(YELLOW)1. Create your first ticket in Taiga:$(NC)"
+	@echo "   - Go to http://localhost:9000"
 	@echo "   - Create ticket with: Status=TODO, Priority=P1"
 	@echo "   - Worker will automatically pick it up"
 	@echo ""
-	@echo -e "$(YELLOW)2. Watch the worker execute:${NC}"
+	@echo -e "$(YELLOW)2. Verify the stack:$(NC)"
+	@echo "   - Run: make doctor"
+	@echo "   - Or open: http://localhost:3001/health"
+	@echo ""
+	@echo -e "$(YELLOW)3. Open Element and talk to workers:$(NC)"
+	@echo "   - Go to http://localhost:8080"
+	@echo "   - Login with your admin account"
+	@echo "   - Use: /status, /timeout-status, /unblock <ticket_id>"
+	@echo ""
+	@echo -e "$(YELLOW)4. Watch execution and results:$(NC)"
 	@echo "   - Run: make logs"
-	@echo "   - See worker spawn and process ticket"
-	@echo ""
-	@echo -e "$(YELLOW)3. When task is BLOCKED:${NC}"
-	@echo "   - Revolt DM sent to admin"
-	@echo "   - Type: /unblock TICKET-123"
-	@echo ""
-	@echo -e "$(YELLOW)4. View retro report after completion:${NC}"
-	@echo "   - PM creates lessons learned"
-	@echo "   - Saved to BookStack"
+	@echo "   - Review docs in Wiki.js after completion"
 	@echo ""
 
 ## update - Pull latest changes

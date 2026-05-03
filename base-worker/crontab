@@ -1,0 +1,14 @@
+# Crontab for worker container
+# Runs cleanup tasks at specified intervals
+
+# Cleanup temp files every 30 minutes
+*/30 * * * * rm -rf /tmp/* 2>/dev/null; rm -rf /workspace/tmp/* 2>/dev/null; rm -rf /root/.cache/* 2>/dev/null
+
+# Clear log files larger than 10MB daily at 3am
+0 3 * * * find /var/log -name "*.log" -size +10M -exec truncate -s 0 {} \; 2>/dev/null
+
+# Health check and report every 15 minutes  
+*/15 * * * * python /workspace/src/health.py --report 2>/dev/null
+
+# Sync and drop caches every hour (if needed)
+0 * * * * sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true

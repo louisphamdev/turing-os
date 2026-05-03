@@ -26,8 +26,8 @@ PM monitors worker health via heartbeats and progress indicators. Workers that d
 │  ┌───────────────────────────────────────────────────────┐ │
 │  │ ZOMBIE KILLER                                          │ │
 │  │ • Cron job every 5 min                                  │ │
-│  │ • Kill containers with no heartbeat > 15 min          │ │
-│  │ • Force restart dead workers                           │ │
+│  │ • DELETE containers with no heartbeat > 15 min         │ │
+│  │ • Containers stopped by admin are NOT deleted          │ │
 │  └───────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -140,7 +140,7 @@ PROGRESS_INDICATORS:
   - File created/modified
   - Test executed
   - API call made
-  - State change in Plane
+  - State change in Taiga
   
 NOT_PROGRESS:
   - Heartbeat sent (that's separate)
@@ -156,7 +156,7 @@ async def report_progress(task_id: str, progress: str):
     """
     Report meaningful progress to PM.
     """
-    await plane.addComment(task_id, {
+    await taiga.addComment(task_id, {
         "type": "progress",
         "worker": worker_id,
         "progress": progress,
@@ -217,7 +217,7 @@ async investigateStuckWorker(workerId: string): Promise<void> {
   const health = this.workers.get(workerId);
   
   // 1. Get current task status
-  const task = await plane.getTask(health.currentTask);
+  const task = await taiga.getTask(health.currentTask);
   
   // 2. Check if task is actually blocked
   if (task.status === 'BLOCKED') {
@@ -241,29 +241,67 @@ async investigateStuckWorker(workerId: string): Promise<void> {
 
 ---
 
+## Worker Lifecycle: Stop vs Delete
+
+### Two Modes of Shutdown
+
+| Mode | Command | Effect | Use Case |
+|------|---------|--------|----------|
+| **STOP** | `docker stop` | Container paused, preserved on disk, can restart | Scale down, temporary pause, preserve "trained" worker |
+| **DELETE** | `docker rm -f` | Container permanently removed, all state lost | Admin removal, zombie cleanup, irrecoverable failure |
+
+### When to STOP (Not Delete)
+
+- Worker has been "trained" — learned project context, already made progress
+- PM wants to scale down idle workers but keep them for later
+- Admin wants to pause a worker temporarily without losing its state
+
+### When to DELETE
+
+- Worker is completely dead/unrecoverable
+- Zombie container (no heartbeat > 15 min, auto-cleanup)
+- Admin explicitly wants to remove a worker permanently
+- Worker failed in a way that requires fresh start
+
+---
+
 ## Kill & Respawn
 
 ### Kill Conditions
 
 | Condition | Action | Reason |
 |-----------|--------|--------|
-| 3 missed heartbeats | Kill + respawn | Worker dead |
-| Stuck > 15 min | Kill + respawn | Worker hung |
-| OOMKilled | Kill + respawn | Out of memory |
-| Unresponsive to PM | Kill + respawn | Glitch |
-| Manual kill | Kill + respawn | Admin command |
+| 3 missed heartbeats | Delete + respawn | Worker dead |
+| Stuck > 15 min | Delete + respawn | Worker hung |
+| OOMKilled | Delete + respawn | Out of memory |
+| Unresponsive to PM | Delete + respawn | Glitch |
+| Manual `/stop` | Stop only | Preserve trained worker |
+| Manual `/delete` | Delete + respawn | Admin command |
+| Scale down (idle) | **Stop** (not delete) | Preserve for restart |
 
-### Kill Process
+### Stop Process (Graceful Scale-Down)
 
 ```
-1. PM logs: "Killing stuck worker [worker_id]"
+1. PM/HR decides: "Scale down worker [worker_id]"
+2. PM logs: "Stopping worker [worker_id] (scale down)"
+3. PM marks worker as STOPPED in registry
+4. PM sends SIGTERM via docker stop [container_id]
+5. Worker saves checkpoint
+6. Container stopped, NOT removed
+7. Worker remains in registry as STOPPED
+8. Admin can restart later: /start [worker_id]
+```
+
+### Delete Process (Permanent)
+
+```
+1. PM logs: "Deleting worker [worker_id]"
 2. PM marks worker as DEAD in registry
-3. PM sends terminate signal to Docker:
-   docker kill [container_id]
+3. PM sends SIGTERM then SIGKILL via docker rm -f [container_id]
 4. Wait for container to stop
-5. PM notifies HR: "Worker [worker_id] died, need respawn"
+5. PM notifies HR: "Worker [worker_id] deleted, need respawn"
 6. HR spawns new worker with same role
-7. New worker checks Plane for interrupted tasks
+7. New worker checks Taiga for interrupted tasks
 8. New worker resumes or gets reassigned
 ```
 
@@ -300,13 +338,19 @@ async respawnWorker(role: WorkerRole): Promise<string> {
 ### Cron Job Configuration
 
 ```typescript
-// orchestrator/src/jobs/zombie-killer.ts
+// orchestrator/src/core/docker.ts  →  killZombies()
+
+// Cron runs every 5 minutes
+// ONLY deletes containers with no heartbeat > 15 min
+// Containers that were manually stopped by admin are SKIPPED
 
 const zombieKiller = cron.schedule('*/5 * * * *', async () => {
   console.log('[ZOMBIE-KILLER] Running health check...');
   
+  // listContainers with all=true to see stopped containers too
   const containers = await docker.listContainers({
-    labels: ['turing-worker']
+    labels: ['turing-worker'],
+    all: true,  // Include stopped containers
   });
   
   for (const container of containers) {
@@ -314,20 +358,23 @@ const zombieKiller = cron.schedule('*/5 * * * *', async () => {
     const health = healthMonitor.getHealth(workerId);
     
     if (!health) {
-      // Unknown container - kill it
-      console.log(`Killing unknown container: ${container.id}`);
-      await docker.kill(container.id);
+      // Unknown container with no registry entry → delete it
+      console.log(`[ZOMBIE] Deleting unknown container: ${container.id}`);
+      await docker.deleteWorker(container.labels['ticket-id']);
       continue;
     }
     
-    const timeSinceHeartbeat = Date.now() - health.lastHeartbeat;
-    
-    if (timeSinceHeartbeat > 15 * 60 * 1000) {
-      // No heartbeat for 15+ min → zombie
-      console.log(`Killing zombie: ${workerId} (no heartbeat ${timeSinceHeartbeat}ms)`);
-      await docker.kill(container.id);
-      await healthMonitor.markDead(workerId);
+    // Only delete running containers that are zombies
+    // Containers in STOPPED state (admin-stopped) are SKIPPED
+    if (container.State === 'running' && health.lastHeartbeat) {
+      const timeSinceHeartbeat = Date.now() - health.lastHeartbeat;
+      if (timeSinceHeartbeat > 15 * 60 * 1000) {
+        console.log(`[ZOMBIE] Deleting zombie: ${workerId} (no heartbeat ${Math.round(timeSinceHeartbeat/60000)}min)`);
+        await docker.deleteWorker(container.labels['ticket-id']);
+        await healthMonitor.markDead(workerId);
+      }
     }
+    // STOPPED containers are NOT touched by zombie killer
   }
 });
 ```
@@ -388,7 +435,7 @@ ALERTS:
     
   notification_targets:
     - PM logs
-    - Revolt DM to admin (on critical)
+    - Matrix DM to admin (on critical)
 ```
 
 ### Alert Message Format

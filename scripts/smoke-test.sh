@@ -21,6 +21,7 @@ echo ""
 
 PASS=0
 FAIL=0
+EXPECTED_SERVICES=13
 
 # Test 1: Docker running
 echo -n "Checking Docker... "
@@ -44,45 +45,55 @@ fi
 
 # Test 3: Services running
 echo -n "Checking services... "
-SERVICES=$(docker compose ps 2>/dev/null | grep -c "running" || echo "0")
-if [ "$SERVICES" -ge 4 ]; then
+SERVICES=$(docker compose ps --services --status running 2>/dev/null | wc -l | tr -d ' ')
+if [ "$SERVICES" -ge "$EXPECTED_SERVICES" ]; then
     log "$SERVICES services running"
     ((PASS++))
 else
-    fail "Only $SERVICES services running (expected 5)"
+    fail "Only $SERVICES services running (expected $EXPECTED_SERVICES)"
     ((FAIL++))
 fi
 
-# Test 4: Plane API
-echo -n "Checking Plane API... "
-if curl -s http://localhost:3000/api/ &>/dev/null; then
-    log "Plane API responding"
+# Test 4: Taiga API
+echo -n "Checking Taiga API... "
+if curl -s http://localhost:9000/api/v1/ &>/dev/null; then
+    log "Taiga API responding"
     ((PASS++))
 else
-    fail "Plane API not responding"
+    fail "Taiga API not responding"
     ((FAIL++))
 fi
 
-# Test 5: BookStack
-echo -n "Checking BookStack... "
+# Test 5: Wiki.js
+echo -n "Checking Wiki.js... "
 if curl -s http://localhost:6875 &>/dev/null; then
-    log "BookStack accessible"
+    log "Wiki.js accessible"
     ((PASS++))
 else
-    fail "BookStack not accessible"
+    fail "Wiki.js not accessible"
     ((FAIL++))
 fi
 
-# Test 6: Revolt
-echo -n "Checking Revolt... "
-if curl -s http://localhost:8080 &>/dev/null; then
-    log "Revolt accessible"
+# Test 6: Matrix/Synapse
+echo -n "Checking Matrix/Synapse... "
+if curl -fsS http://localhost:8008/_matrix/client/versions &>/dev/null; then
+    log "Matrix accessible"
     ((PASS++))
 else
-    warn "Revolt not accessible (may be first-time setup)"
+    warn "Matrix not accessible (may be first-time setup)"
 fi
 
-# Test 7: Worker image
+# Test 7: Orchestrator health
+echo -n "Checking Orchestrator API... "
+if curl -fsS http://localhost:3001/health &>/dev/null; then
+    log "Orchestrator health responding"
+    ((PASS++))
+else
+    fail "Orchestrator health not responding"
+    ((FAIL++))
+fi
+
+# Test 8: Worker image
 echo -n "Checking worker image... "
 if docker images | grep -q "turing-worker-base"; then
     log "Worker image exists"
@@ -92,7 +103,7 @@ else
     ((FAIL++))
 fi
 
-# Test 8: Orchestrator image
+# Test 9: Orchestrator image
 echo -n "Checking orchestrator image... "
 if docker images | grep -q "turing-orchestrator"; then
     log "Orchestrator image exists"
@@ -116,7 +127,7 @@ if [ $FAIL -eq 0 ]; then
     echo -e "${GREEN}All tests passed! Turing OS is ready.${NC}"
     echo ""
     echo "Next steps:"
-    echo "  1. Create a ticket in Plane: http://localhost:3000"
+    echo "  1. Create a ticket in Taiga: http://localhost:9000"
     echo "  2. Watch worker execute: make logs"
     echo "  3. View status: make status"
     exit 0

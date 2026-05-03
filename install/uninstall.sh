@@ -46,7 +46,7 @@ docker rmi turing-worker-base:latest turing-orchestrator:latest 2>/dev/null || t
 
 # Remove volumes
 log "Removing volumes..."
-docker volume rm turing-os_plane-db turing-os_bookstack-db turing-os_minio 2>/dev/null || true
+docker volume rm turing-os_taiga-db turing-os_wiki-db 2>/dev/null || true
 
 # Remove installation directory
 log "Removing installation directory..."

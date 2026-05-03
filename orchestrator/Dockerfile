@@ -14,7 +14,7 @@ COPY tsconfig.json ./
 RUN npm run build
 
 # Expose port
-EXPOSE 3000
+EXPOSE 3001
 
 # Run the built app
 CMD ["npm", "start"]

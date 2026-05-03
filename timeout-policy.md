@@ -153,7 +153,7 @@ CIRCUIT_BREAKER = {
 
 ## Timeout Implementation
 
-### Worker-Side (plane_tools.py)
+### Worker-Side (taiga_tools.py)
 
 ```python
 async def send_to_pm_with_timeout(message: str, timeout: int = 300):
@@ -196,7 +196,7 @@ class EscalationManager {
   
   async escalateToPO(workerId: string, taskId: string, reason: string) {
     const message = this.formatEscalation(workerId, taskId, reason);
-    await revolt.sendDM(po_user_id, message);
+    await matrix.sendDM(po_user_id, message);
     await this.logEscalation(workerId, taskId, reason);
   }
 }

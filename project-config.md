@@ -3,7 +3,7 @@
 ## Overview
 
 This document defines project-level settings that control task execution behavior.
-These settings can be configured per-project and are stored in BookStack.
+These settings can be configured per-project and are stored in Wiki.js.
 
 ---
 
@@ -74,7 +74,7 @@ execution:
 When P0 (CRITICAL) arrives:
 
 IF mode == sequential:
-  1. PAUSE current task (save state to Plane)
+  1. PAUSE current task (save state to Taiga)
   2. SWAP to P0 task immediately
   3. Complete P0
   4. RESUME paused task
@@ -167,14 +167,14 @@ thresholds:
 action_on_threshold:
   - Pause lowest priority task
   - Notify PM
-  - Log to BookStack
+  - Log to Wiki.js
 ```
 
 ---
 
 ## Configuration File Example
 
-Store in BookStack at `/projects/[project-id]/config.yaml`:
+Store in Wiki.js at `/projects/[project-id]/config.yaml`:
 
 ```yaml
 project:
@@ -239,7 +239,7 @@ get_queue_status()
 
 ```
 1. STOP: Current execution
-2. CHECKPOINT: Save progress to Plane comments
+2. CHECKPOINT: Save progress to Taiga comments
 3. STATE: Mark as PAUSED
 4. AWAIT: New task assignment
 5. ON RESUME: Load checkpoint, continue

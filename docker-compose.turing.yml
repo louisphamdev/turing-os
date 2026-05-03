@@ -1,0 +1,20 @@
+# Turing OS - Minimal Docker Compose
+# Run ONLY the turing-os image (orchestrator + worker)
+# For full stack, use docker-compose.yml instead
+
+services:
+  turing-os:
+    image: turing-os:latest
+    container_name: turing_os
+    ports:
+      - "3001:3001"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    networks:
+      - turing_network
+
+networks:
+  turing_network:
+    driver: bridge

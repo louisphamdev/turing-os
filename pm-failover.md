@@ -15,7 +15,7 @@ PM is the single point of failure. To prevent system-wide paralysis when PM goes
 │  │  • Task assignments                              │   │
 │  │  • Resource orchestration                       │   │
 │  │  • Worker coordination                           │   │
-│  │  • Heartbeat to Plane every 30s                  │   │
+│  │  • Heartbeat to Taiga every 30s                   │   │
 │  └─────────────────────────────────────────────────┘   │
 │                         │                               │
 │                    State Sync                           │
@@ -28,7 +28,7 @@ PM is the single point of failure. To prevent system-wide paralysis when PM goes
 │                    STANDBY PM                           │
 │  ┌─────────────────────────────────────────────────┐   │
 │  │  • Hot standby, ready to take over              │   │
-│  │  • Reads state from Plane                       │   │
+│  │  • Reads state from Taiga                        │   │
 │  │  • Monitors primary heartbeat                   │   │
 │  │  • If primary offline > 60s → TAKEOVER           │   │
 │  └─────────────────────────────────────────────────┘   │
@@ -71,12 +71,12 @@ SYNC_STATE = {
 
 ```
 PRIMARY PM (every 30 seconds):
-1. Write current state to Plane ticket "PM-STATE"
+1. Write current state to Taiga ticket "PM-STATE"
 2. Update heartbeat timestamp
 3. Continue normal operations
 
 STANDBY PM (every 30 seconds):
-1. Read "PM-STATE" from Plane
+1. Read "PM-STATE" from Taiga
 2. Check primary heartbeat timestamp
 3. IF heartbeat > 60s old → PRIMARY DEAD → TAKE OVER
 4. IF heartbeat < 60s → OK, continue standby
@@ -110,10 +110,10 @@ STANDBY PM (every 30 seconds):
 WHEN STANDBY DETECTS PRIMARY DEAD (T+60s):
 
 1. STANDBY logs: "Primary PM dead, initiating takeover"
-2. STANDBY updates Plane: "PM-STATE" with new primary
+3. STANDBY updates Taiga: "PM-STATE" with new primary
 3. STANDBY sends broadcast to all workers:
    "PM failover complete. New PM: [standby_id]"
-4. STANDBY reads full state from Plane
+4. STANDBY reads full state from Taiga
 5. STANDBY resumes operations:
    - Check blocked tasks
    - Resume interrupted tasks
@@ -185,14 +185,14 @@ class PMStateManager {
       heartbeat: Date.now()
     };
     
-    await plane.updateTicket(this.stateTicketId, {
+    await taiga.updateTicket(this.stateTicketId, {
       comment: JSON.stringify(content)
     });
   }
   
   async heartbeat(): Promise<void> {
     // Lightweight heartbeat every 30s
-    await plane.updateTicket(this.stateTicketId, {
+    await taiga.updateTicket(this.stateTicketId, {
       comment: `ping:${Date.now()}`
     });
   }
@@ -209,7 +209,7 @@ class StandbyPM {
   private checkInterval = 30000; // 30s
   
   async checkPrimaryHealth(): Promise<boolean> {
-    const state = await plane.getTicket("PM-STATE");
+    const state = await taiga.getTicket("PM-STATE");
     const lastHeartbeat = state.comments.last?.timestamp;
     
     return (Date.now() - lastHeartbeat) < this.primaryHeartbeatTimeout;
@@ -272,7 +272,7 @@ FLAP_PREVENTION = {
 /failover-now             # Manual failover trigger
 /reset-pm                 # Reset primary to original
 /pm-health                # Check both PMs health
-/view-pm-state            # Current state in Plane
+/view-pm-state            # Current state in Taiga
 ```
 
 ---
@@ -308,7 +308,7 @@ When workers can't reach any PM:
 WORKER SAFEMODE:
 1. Stop accepting new tasks
 2. Complete current atomic operation
-3. Save checkpoint to Plane
+3. Save checkpoint to Taiga
 4. Log: "PM unreachable, entering safemode"
 5. Wait for PM to restore
 6. On PM restore: reconnect, resume

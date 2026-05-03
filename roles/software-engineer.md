@@ -39,7 +39,7 @@ TOOL_CALL: research_with_context7
 ARGUMENTS: {"library_name": "fastapi", "topic": "authentication"}
 
 This fetches latest documentation from Context7 API.
-API key is injected at worker spawn time from BookStack secrets.
+API key is injected at worker spawn time from Wiki.js secrets.
 ```
 
 ### 3. Why This Matters

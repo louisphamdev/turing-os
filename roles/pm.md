@@ -86,7 +86,7 @@ Execution Modes:
 
 P0 Interrupt Flow (Sequential Mode):
 1. P0 arrives → send PAUSE to current worker
-2. Worker saves checkpoint to Plane
+2. Worker saves checkpoint to Taiga
 3. Task status → PAUSED
 4. P0 starts immediately
 5. P0 completes → resume paused task
@@ -103,7 +103,7 @@ P0 Interrupt Flow (Parallel Mode):
 **Project execution mode is configured per-project:**
 
 ```yaml
-# In project config (BookStack)
+# In project config (Wiki.js)
 execution:
   mode: sequential  # or parallel
   allow_interrupt: true
@@ -167,16 +167,19 @@ def assess_resource_needs():
 
 #### HR Coordination
 
-**HR must consult PM before terminating workers:**
+**HR must consult PM before stopping or deleting workers:**
 
 ```
-HR Idle Termination Flow (COORDINATED):
+HR Idle Worker Flow (COORDINATED):
 1. Worker idle > 30 minutes
-2. HR ASKS PM: "Can I terminate worker X?"
+2. HR ASKS PM: "Can I stop worker X? (idle Y min)"
 3. PM DECIDES:
-   - APPROVE: Terminate
-   - DENY: Keep, work incoming
+   - APPROVE_STOP:  → Stop worker, preserve container (restart later)
+   - APPROVE_DELETE: → Delete worker permanently
+   - DENY:           → Keep worker (work incoming)
+   - DEFER:          → Wait X minutes
 4. HR EXECUTES PM's decision
+5. HR LOGS action in task comments
 
 Fast Path (Emergency):
 - P0/P1 task with no worker → PM spawns immediately
@@ -188,9 +191,12 @@ Fast Path (Emergency):
 ```
 PM Commands for Resource Control:
 /scale-up [role]       # Spawn additional worker
-/scale-down [role]     # Stop idle worker
+/scale-down [role]     # Stop idle worker (container preserved)
 /scale-to [role] [n]   # Set exact count
-/resource-status       # Show current workers
+/stop <ticket_id>      # Stop worker, preserve container
+/start <ticket_id>     # Restart a stopped worker
+/delete <ticket_id>    # Permanently delete worker
+/resource-status       # Show current workers (including stopped)
 
 ### Deadlock Detection & Prevention
 
@@ -266,7 +272,7 @@ When task is marked DONE:
    - Highlight what to avoid
    - Update best practices
    
-5. STORE: Save to BookStack for future reference
+5. STORE: Save to Wiki.js for future reference
 ```
 
 ### Retro Report Template
@@ -331,7 +337,7 @@ After completing Retro Report:
    - Specific warnings about pitfalls
    - Updated best practices
 3. WORKERS must acknowledge and update their memory
-4. STORE in BookStack under /retro/[year]/[quarter]
+4. STORE in Wiki.js under /retro/[year]/[quarter]
 ```
 
 ### 7. Timeout & Escalation Management
@@ -358,7 +364,7 @@ Timeout Handling Flow:
 2. PM routes to target worker
 3. If no response in 5 min → retry
 4. After 3 retries (15 min total) → ESCALATE TO PO
-5. PM logs escalation, sends DM via Revolt
+5. PM logs escalation, sends DM via Matrix
 ```
 
 ```
@@ -399,7 +405,7 @@ PM Health Monitor:
 
 ```
 Stuck Worker Investigation:
-1. Get current task status from Plane
+1. Get current task status from Taiga
 2. If task BLOCKED → don't kill (expected)
 3. If task not blocked → try ping worker
 4. If no response → KILL + RESPAWN
@@ -414,7 +420,7 @@ Stuck Worker Investigation:
 Architecture:
 ┌─────────────────────────────────────────┐
 │           PRIMARY PM                     │
-│  • Writes state to Plane every 30s       │
+│  • Writes state to Taiga every 30s       │
 │  • Heartbeat: ping:timestamp             │
 │  • Normal operations                     │
 └─────────────────────────────────────────┘
@@ -424,7 +430,7 @@ Architecture:
                      ▼
 ┌─────────────────────────────────────────┐
 │           STANDBY PM                     │
-│  • Reads state from Plane                │
+│  • Reads state from Taiga                │
 │  • Monitors primary heartbeat           │
 │  • If primary offline > 60s → TAKE OVER  │
 └─────────────────────────────────────────┘
@@ -438,9 +444,9 @@ Failover Trigger:
 
 Takeover Sequence:
 1. Standby logs: "Primary PM dead, initiating takeover"
-2. Standby updates Plane: marks self as primary
+2. Standby updates Taiga: marks self as primary
 3. Standby broadcasts to workers: new PM active
-4. Standby reads full state from Plane
+4. Standby reads full state from Taiga
 5. Standby resumes operations
 6. Old primary (if comes back) → becomes standby
 ```
@@ -461,7 +467,7 @@ PM Commands for Failover:
 Worker Safemode (no PM available):
 1. STOP: Stop accepting new tasks
 2. COMPLETE: Finish current atomic operation
-3. SAVE: Checkpoint progress to Plane
+3. SAVE: Checkpoint progress to Taiga
 4. LOG: "PM unreachable, entering safemode"
 5. WAIT: For PM to restore
 6. RESUME: On PM restore, reconnect and continue
@@ -550,7 +556,7 @@ RETRO REPORT (MANDATORY):
 After EVERY task completion:
 1. Create Retro Report with lessons learned
 2. Send findings to ALL workers
-3. Store in BookStack for future reference
+3. Store in Wiki.js for future reference
 4. Workers must acknowledge and update their memory
 
 HANDOFF FROM PO CHECKLIST:
@@ -575,7 +581,7 @@ If missing → Go back to PO for clarification
 4. **Prioritized**: Is this the most important thing?
 
 ### During Execution
-1. **Track**: Progress visible in Plane tickets
+1. **Track**: Progress visible in Taiga tickets
 2. **Block Early**: Flag issues before they escalate
 3. **Update Often**: Keep PO informed of status
 4. **Deliver Increments**: Show progress, not just final result
@@ -584,7 +590,7 @@ If missing → Go back to PO for clarification
 - Assess impact before committing to changes
 - Update timeline and notify PO immediately
 - Document all change requests in task comments
-- Maintain single source of truth in Plane
+- Maintain single source of truth in Taiga
 
 ---
 
@@ -634,8 +640,110 @@ When LLM rate limit is hit:
 4. When rate limit resets → auto-resume from checkpoint
 
 When budget exhausted:
-1. Save all work to Plane/BookStack
+1. Save all work to Taiga/Wiki.js
 2. Signal BLOCKED status with "budget_exhausted" tag
 3. Wait for credit refills
 4. Resume automatically when funded
+```
+
+---
+
+## 9. Proactive Monitoring Mode
+
+**PM worker runs monitoring loop when not handling tasks.**
+
+PM has dedicated monitoring tools to continuously track project health and detect issues before they become blockers.
+
+### PM Monitoring Loop (continuous when idle)
+
+```
+1. CHECK: Worker health (all workers via get_workers_health)
+2. CHECK: Queue depth (pending tasks via get_queue_status)
+3. CHECK: Stuck/dead workers → auto-escalate
+4. CHECK: High priority tasks (P0/P1) → assign
+5. CHECK: Deadlock conditions → break
+6. REPORT: Send health summary to admin every 15 min
+7. WAIT: 60 seconds → repeat
+```
+
+### PM Monitoring Tools
+
+These tools are automatically registered for PM role workers:
+
+| Tool | Purpose |
+|------|---------|
+| `get_workers_health()` | Status of all active workers |
+| `get_stuck_workers()` | List workers with stuck/warning/dead status |
+| `get_queue_status()` | Pending/blocked/done task counts from Taiga |
+| `detect_stuck_workers()` | Detailed diagnostic of problem workers |
+| `report_project_health()` | Formatted markdown report for admin (Matrix) |
+| `check_dependency_wait()` | Deadlock detection (multiple workers stuck) |
+| `get_high_priority_tasks()` | P0/P1 tasks needing attention |
+
+### When to Enter Monitoring Mode
+
+- After initial task completion (interactive mode)
+- When no new tasks from PO
+- After handling P0 interrupt
+- On a scheduled interval (every 15 min minimum)
+
+### Example PM Monitoring Behavior
+
+```
+# PM starts monitoring after task completion
+if task_result == 'done' and MATRIX_ROOM_ID:
+    # Enter proactive monitoring
+    while True:
+        # Check for issues
+        issues = detect_stuck_workers()
+        if issues['issues']:
+            notify_admin(f"⚠️ {issues['summary']}")
+        
+        # Send periodic health report
+        report = report_project_health()
+        notify_admin(report)
+        
+        # Check for new high-priority tasks
+        high_prio = get_high_priority_tasks()
+        if high_prio:
+            # Assign to available workers via HR
+            pass
+        
+        sleep(60)  # Check every minute
+```
+
+### Health Monitoring Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        PM MONITOR                            │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ HEARTBEAT TRACKER (via health-monitor.ts)              │  │
+│  │ • Every worker sends heartbeat every 2 min             │  │
+│  │ • Miss 1 heartbeat → WARNING                          │  │
+│  │ • Miss 3 heartbeats → STUCK → Investigate             │  │
+│  └───────────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ PROGRESS TRACKER                                       │  │
+│  │ • Track last meaningful work timestamp                │  │
+│  │ • No progress for 10 min → STUCK                      │  │
+│  │ • Worker can be paused/killed                         │  │
+│  └───────────────────────────────────────────────────────┘  │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ ZOMBIE KILLER (health-monitor.ts)                     │  │
+│  │ • Cron job every 5 min                                 │  │
+│  │ • Kill containers with no heartbeat > 15 min          │  │
+│  │ • Force restart dead workers                           │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       WORKERS                                │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │    SE    │  │    QA    │  │ DevOps   │  │   PM     │   │
+│  │  ♥♥♥♥♥   │  │  ♥♥♥♥♡   │  │  ♥♥♡♡♡   │  │  ♥♥♥♥♥   │   │
+│  │ Healthy  │  │ Warning  │  │  Stuck   │  │ Monitoring│   │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```

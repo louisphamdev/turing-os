@@ -58,17 +58,17 @@ global:
 
 # Services
 services:
-  plane:
+  taiga:
     enabled: true
     replicas: 1
     storageSize: 10Gi
     
-  bookstack:
+  wiki:
     enabled: true
     replicas: 1
     storageSize: 5Gi
     
-  revolt:
+  matrix:
     enabled: true
     replicas: 1
     

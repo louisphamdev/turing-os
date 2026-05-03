@@ -9,7 +9,7 @@
 | Aspect | HiClaw | Turing OS | Winner |
 |--------|--------|-----------|--------|
 | **Architecture** | Manager-Worker flat | PO→PM→HR→Workers hierarchy | Turing OS |
-| **State Management** | Workers stateless via MinIO | Zero-state workers, all in Plane | Turing OS |
+| **State Management** | Workers stateless via MinIO | Zero-state workers, all in Taiga | Turing OS |
 | **Idempotency** | None | Registry-based deduplication | Turing OS |
 | **Priority System** | None | P0-P3 with interrupt capability | Turing OS |
 | **Resource Scaling** | Manual Worker creation | PM-controlled auto-scaling | Turing OS |
@@ -79,14 +79,14 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 - No formal state machine
 
 **Turing OS:**
-- Workers are zero-state (all state in Plane)
+- Workers are zero-state (all state in Taiga)
 - Ticket is single source of truth
 - Formal state machine: `TODO → IN_PROGRESS → REVIEW/DONE/BLOCKED`
 - Every state transition is logged and auditable
 
 **Winner: Turing OS**
 - Formal state machine prevents invalid transitions
-- Plane provides API access, not just chat messages
+- Taiga provides API access, not just chat messages
 - No file storage dependency (MinIO can fail)
 
 ---
@@ -404,7 +404,7 @@ Specialization Skills:
 | Feature | HiClaw | Turing OS | Turing OS Advantage |
 |---------|--------|-----------|---------------------|
 | **Architecture** | Flat Manager-Worker | Hierarchical PO→PM→HR→Workers | Clear separation of concerns |
-| **State** | MinIO files + Matrix | Plane tickets only | Single source of truth |
+| **State** | MinIO files + Matrix | Taiga tickets only | Single source of truth |
 | **Idempotency** | ❌ None | ✅ Registry | Prevents duplicate work |
 | **Priority** | ❌ None | ✅ P0-P3 + interrupt | Critical tasks first |
 | **Scaling** | Manual | PM auto-scale + modes | Cost efficient |
@@ -417,7 +417,7 @@ Specialization Skills:
 | **Skills** | Generic + skills.sh | Domain-specific JD | Better matching |
 | **Retro Reports** | ❌ None | ✅ PM creates | Continuous learning |
 | **Escalation** | Manual human | Auto → PO | SLA-bound |
-| **Security** | Gateway holds keys | Keys in BookStack | Better isolation |
+| **Security** | Gateway holds keys | Keys in Wiki.js | Better isolation |
 
 ---
 
@@ -430,9 +430,9 @@ Specialization Skills:
    - We can add OpenClaw/QwenPaw workers if needed
 
 2. **Matrix Integration** (built-in chat)
-   - Turing OS: We use Plane for tasks + Revolt for alerts
-   - Plane provides structured data, not just chat
-   - Revolt provides DM capability (like Matrix)
+   - Turing OS: We use Taiga for tasks + Matrix for alerts
+   - Taiga provides structured data, not just chat
+   - Matrix provides DM capability (like Matrix)
 
 3. **One-Command Install** (`curl | bash`)
    - Turing OS: `docker compose up -d` is similar

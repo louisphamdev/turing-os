@@ -1,0 +1,52 @@
+# Override docker-compose.yml to only run turing-orchestrator
+# Usage: docker compose -f docker-compose.yml -f docker-compose.override.yml up -d
+
+services:
+  # Disable all infra services
+  taiga-db:
+    profiles: ["disabled"]
+  taiga-events-rabbitmq:
+    profiles: ["disabled"]
+  taiga-async-rabbitmq:
+    profiles: ["disabled"]
+  taiga-back:
+    profiles: ["disabled"]
+  taiga-async:
+    profiles: ["disabled"]
+  taiga-front:
+    profiles: ["disabled"]
+  taiga-events:
+    profiles: ["disabled"]
+  taiga-protected:
+    profiles: ["disabled"]
+  taiga-gateway:
+    profiles: ["disabled"]
+  wiki:
+    profiles: ["disabled"]
+  synapse:
+    profiles: ["disabled"]
+  element:
+    profiles: ["disabled"]
+
+  # Full turing-orchestrator override - redefine completely
+  turing-orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: turing-os:latest
+    container_name: turing_orchestrator
+    profiles: ["enabled"]
+    depends_on: []
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - TAIGA_API_URL=${TAIGA_API_URL:-http://taiga-gateway:9000/api/v1}
+      - MATRIX_API_URL=${SYNAPSE_API_URL:-http://synapse:8008}
+      - ORCHESTRATOR_URL=http://turing-orchestrator:3001
+      - WIKI_URL=${WIKI_URL:-http://wiki:3000}
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - DOCKER_NETWORK=turing_network
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - turing_network
