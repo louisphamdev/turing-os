@@ -1,332 +1,276 @@
 """
-Tool Registry — Persistent Tool Storage via Wiki.js
+Tool Registry — Persistent Tool Storage via BookStack
 
 Provides persistent, shared tool storage across workers:
-- Tools are stored in Wiki.js as JSON pages
-- Workers load tools from Wiki on startup
-- New tools can be saved to Wiki for sharing
+- Tools are stored in BookStack as JSON in page content
+- Workers load tools from BookStack on startup
+- New tools can be saved to BookStack for sharing
 - Tool definitions include: name, description, module, function, parameters
 
-Storage format (Wiki page):
-  Path: /tools/{tool_name}
-  Content: JSON with tool definition
-  Tags: ["turing-tool", "shared"]
+Storage format (BookStack page):
+  Page name: /tools/{tool_name}
+  Page content: JSON with tool definition
 """
 
 import os
 import json
 import importlib
+import requests
 from typing import Optional, Callable, Any
 
-WIKI_URL = os.environ.get('WIKI_URL', 'http://wiki:3000')
-WIKI_JWT_TOKEN = os.environ.get('WIKI_JWT_TOKEN', '')
+BOOKSTACK_URL = os.environ.get('"'"'BOOKSTACK_URL'"'"', '"'"'http://bookstack:80'"'"')
+BOOKSTACK_TOKEN = os.environ.get('"'"'BOOKSTACK_TOKEN'"'"', '"'"''"'"')
 
-# ─── Wiki Tool Storage ──────────────────────────────────────────────────────
+# ─── BookStack Tool Storage ────────────────────────────────────────────────────
 
-TOOLS_PAGE_PATH_PREFIX = '/tools/'
+TOOLS_BOOK_NAME = '"'"'Turing OS Tools'"'"'
+TOOLS_SHELF_NAME = '"'"'Turing OS'"'"'
 
 
-def _wiki_query(query: str, variables: dict = None) -> dict:
-    """Make GraphQL request to Wiki.js"""
-    import requests
-
-    url = f"{WIKI_URL}/graphql"
+def _bs_request(method: str, endpoint: str, data: dict = None, params: dict = None) -> dict:
+    """Make REST request to BookStack API"""
+    url = f"{BOOKSTACK_URL}/api/{endpoint.lstrip('"'"'/"'"')}"
     headers = {
-        'Authorization': f'Bearer {WIKI_JWT_TOKEN}',
-        'Content-Type': 'application/json',
+        '"'"'Authorization'"'"': f'"'"'Token {BOOKSTACK_TOKEN}'"'"',
+        '"'"'Content-Type'"'"': '"'"'application/json'"'"',
+        '"'"'Accept'"'"': '"'"'application/json'"'"',
     }
+
+    if not BOOKSTACK_TOKEN:
+        return {'"'"'error'"'"': '"'"'BOOKSTACK_TOKEN not configured'"'"'}
 
     try:
-        resp = requests.post(url, headers=headers, json={'query': query, 'variables': variables}, timeout=15)
+        if method.upper() == '"'"'GET'"'"':
+            resp = requests.get(url, headers=headers, params=params, timeout=15)
+        elif method.upper() == '"'"'POST'"'"':
+            resp = requests.post(url, headers=headers, json=data, timeout=15)
+        elif method.upper() == '"'"'PUT'"'"':
+            resp = requests.put(url, headers=headers, json=data, timeout=15)
+        elif method.upper() == '"'"'DELETE'"'"':
+            resp = requests.delete(url, headers=headers, timeout=15)
+        else:
+            return {'"'"'error'"'"': f'"'"'Unsupported HTTP method: {method}'"'"'}
+
         resp.raise_for_status()
-        data = resp.json()
-        if 'errors' in data:
-            return {'error': '; '.join([e.get('message', str(e)) for e in data['errors']])}
-        return data.get('data', {})
+        if resp.content:
+            return resp.json()
+        return {'"'"'success'"'"': True}
+    except requests.exceptions.HTTPError as e:
+        try:
+            return {'"'"'error'"'"': e.response.json().get('"'"'message'"'"', str(e))}
+        except:
+            return {'"'"'error'"'"': str(e)}
     except Exception as e:
-        return {'error': str(e)}
+        return {'"'"'error'"'"': str(e)}
 
 
-def _find_page_by_path(path: str) -> Optional[dict]:
-    """Find a Wiki page by its path"""
-    query = """
-    query($path: String!) {
-      pages {
-        singleByPath(path: $path) {
-          id
-          title
-          content
-        }
-      }
-    }
-    """
-    result = _wiki_query(query, {'path': path})
-    if 'error' in result:
-        return None
-    page = result.get('pages', {}).get('singleByPath')
-    return page if page else None
+def _ensure_shelf_and_book() -> tuple:
+    """Ensure the shelf and book exist for storing tools. Returns (book_id, shelf_id)."""
+    shelves = _bs_request('"'"'GET'"'"', '"'"'shelves'"'"', params={'"'"'count'"'"': 100})
+    if '"'"'error'"'"' in shelves:
+        return {}, None
 
+    shelf_id = None
+    for shelf in shelves.get('"'"'data'"'"', []):
+        if shelf.get('"'"'name'"'"') == TOOLS_SHELF_NAME:
+            shelf_id = shelf.get('"'"'id'"'"')
+            break
 
-def _create_or_update_page(path: str, title: str, content: str, tags: list = None) -> dict:
-    """Create or update a Wiki page"""
-    existing = _find_page_by_path(path)
-    
-    if existing:
-        # Update existing page
-        page_id = existing['id']
-        mutation = """
-        mutation($id: Int!, $content: String!) {
-          pages {
-            update(id: $id, content: $content) {
-              id
-              title
-            }
-          }
-        }
-        """
-        result = _wiki_query(mutation, {'id': int(page_id), 'content': content})
-    else:
-        # Create new page - need parent folder first
-        parent_path = '/tools'
-        parent = _find_page_by_path(parent_path)
-        if not parent:
-            # Create /tools folder
-            _create_folder('/tools', 'Shared Tools')
-            parent = _find_page_by_path(parent_path)
-        
-        mutation = """
-        mutation($content: String!, $description: String, $path: String!, $title: String!) {
-          pages {
-            create(content: $content, description: $description, path: $path, title: $title) {
-              id
-              path
-            }
-          }
-        }
-        """
-        result = _wiki_query(mutation, {
-            'content': content,
-            'description': f'Turing OS shared tool: {title}',
-            'path': path,
-            'title': title,
+    if not shelf_id:
+        result = _bs_request('"'"'POST'"'"', '"'"'shelves'"'"', data={'"'"'name'"'"': TOOLS_SHELF_NAME, '"'"'description'"'"': '"'"'Turing OS shared tools'"'"'})
+        if '"'"'error'"'"' not in result:
+            shelf_id = result.get('"'"'shelf'"'"', result).get('"'"'id'"'"')
+
+    books = _bs_request('"'"'GET'"'"', '"'"'books'"'"', params={'"'"'count'"'"': 100})
+    if '"'"'error'"'"' in books:
+        return {}, shelf_id
+
+    book_id = None
+    for book in books.get('"'"'data'"'"', []):
+        if book.get('"'"'name'"'"') == TOOLS_BOOK_NAME:
+            book_id = book.get('"'"'id'"'"')
+            break
+
+    if not book_id:
+        result = _bs_request('"'"'POST'"'"', '"'"'books'"'"', data={
+            '"'"'name'"'"': TOOLS_BOOK_NAME,
+            '"'"'description'"'"': '"'"'Shared tool definitions for Turing OS workers'"'"',
+            '"'"'shelf_id'"'"': shelf_id
         })
-    
-    return result
+        if '"'"'error'"'"' not in result:
+            book_id = result.get('"'"'book'"'"', result).get('"'"'id'"'"')
+
+    return book_id, shelf_id
 
 
-def _create_folder(path: str, title: str) -> bool:
-    """Create a Wiki folder"""
-    mutation = """
-    mutation($path: String!, $title: String!) {
-      storage {
-        createFolder(path: $path, name: $title) {
-          success
+def _find_page_by_name(name: str, book_id: int) -> Optional[dict]:
+    """Find a page in a book by name"""
+    pages = _bs_request('"'"'GET'"'"', f'"'"'books/{book_id}/pages'"'"', params={'"'"'count'"'"': 100})
+    if '"'"'error'"'"' in pages:
+        return None
+
+    for page in pages.get('"'"'data'"'"', []):
+        if page.get('"'"'name'"'"') == name:
+            page_detail = _bs_request('"'"'GET'"'"', f'"'"'pages/{page.get("id")}'"'"')
+            if '"'"'error'"'"' not in page_detail:
+                return page_detail.get('"'"'page'"'"', page_detail)
+            return page
+    return None
+
+
+def _create_or_update_page(name: str, content: str, book_id: int, chapter_id: int = None) -> dict:
+    """Create or update a page in BookStack"""
+    existing = _find_page_by_name(name, book_id)
+
+    if existing:
+        page_id = existing.get('"'"'id'"'"')
+        return _bs_request('"'"'PUT'"'"', f'"'"'pages/{page_id}'"'"', data={
+            '"'"'name'"'"': name,
+            '"'"'markdown'"'"': content,
+        })
+    else:
+        data = {
+            '"'"'book_id'"'"': book_id,
+            '"'"'name'"'"': name,
+            '"'"'markdown'"'"': content,
         }
-      }
-    }
-    """
-    result = _wiki_query(mutation, {'path': path, 'title': title})
-    return result.get('storage', {}).get('createFolder', {}).get('success', False)
+        if chapter_id:
+            data['"'"'chapter_id'"'"'] = chapter_id
+        return _bs_request('"'"'POST'"'"', '"'"'pages'"'"', data=data)
 
 
-# ─── Tool Definition Schema ─────────────────────────────────────────────────
+def list_tools_from_wiki() -> list:
+    """List all shared tools stored in BookStack."""
+    if not BOOKSTACK_TOKEN:
+        print("[ToolRegistry] WARNING: BOOKSTACK_TOKEN not configured")
+        return []
 
-TOOL_DEFINITION_SCHEMA = {
-    "name": "string (required) - Tool name",
-    "description": "string - Human-readable description",
-    "module": "string - Python module path (e.g., 'mymodule')",
-    "function": "string - Function name in the module",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "param_name": {"type": "string", "description": "description"}
-        }
-    },
-    "tags": ["optional tags for categorization"],
-    "created_by": "worker ticket_id",
-    "created_at": "ISO timestamp"
-}
+    book_id, _ = _ensure_shelf_and_book()
+    if not book_id:
+        return []
+
+    tools = []
+    pages = _bs_request('"'"'GET'"'"', f'"'"'books/{book_id}/pages'"'"', params={'"'"'count'"'"': 100})
+    if '"'"'error'"'"' in pages:
+        return []
+
+    for page in pages.get('"'"'data'"'"', []):
+        page_detail = _bs_request('"'"'GET'"'"', f'"'"'pages/{page.get("id")}'"'"')
+        if '"'"'error'"'"' in page_detail:
+            continue
+
+        page_data = page_detail.get('"'"'page'"'"', {})
+        content = page_data.get('"'"'markdown'"'"', '"'"''"'"')
+
+        try:
+            if content.startswith('"'"'\`\`\`'"'"'):
+                lines = content.split('"'"'\n'"'"')
+                content = '"'"'\n'"'"'.join(lines[1:-1])
+            tool_def = json.loads(content)
+            if isinstance(tool_def, dict) and '"'"'name'"'"' in tool_def:
+                tools.append(tool_def)
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    return tools
+
+
+def load_tool_from_wiki(tool_name: str) -> Optional[dict]:
+    """Load a single tool definition by name."""
+    if not BOOKSTACK_TOKEN:
+        return None
+
+    book_id, _ = _ensure_shelf_and_book()
+    if not book_id:
+        return None
+
+    page = _find_page_by_name(f'"'"'/tools/{tool_name}'"'", book_id)
+    if not page:
+        return None
+
+    content = page.get('"'"'markdown'"'"', '"'"''"'"')
+    try:
+        if content.startswith('"'"'\`\`\`'"'"'):
+            lines = content.split('"'"'\n'"'"')
+            content = '"'"'\n'"'"'.join(lines[1:-1])
+        return json.loads(content)
+    except:
+        return None
 
 
 def save_tool_to_wiki(
     tool_name: str,
     module_path: str,
     function_name: str,
-    description: str = "",
-    parameters: dict = None,
-    tags: list = None,
     created_by: str = None,
+    description: str = "",
+    tags: list = None,
+    parameters: dict = None,
 ) -> dict:
-    """
-    Save a tool definition to Wiki.js for sharing across workers.
-    
-    Returns: { success: bool, message: str, page_id: str or None }
-    """
-    import time
-    
+    """Save a tool definition to BookStack."""
+    if not BOOKSTACK_TOKEN:
+        return {'"'"'success'"'"': False, '"'"'message'"'"': '"'"'BOOKSTACK_TOKEN not configured'"'"'}
+
+    book_id, _ = _ensure_shelf_and_book()
+    if not book_id:
+        return {'"'"'success'"'"': False, '"'"'message'"'"': '"'"'Could not create/find tools book'"'"'}
+
     tool_def = {
         "name": tool_name,
-        "description": description,
+        "description": description or f"Tool {tool_name}",
         "module": module_path,
         "function": function_name,
         "parameters": parameters or {},
-        "tags": tags or [],
-        "created_by": created_by or os.environ.get('TICKET_ID', 'unknown'),
-        "created_at": time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-        "version": "1.0",
+        "tags": tags or ["turing-tool", "shared"],
+        "created_by": created_by or "unknown",
+        "created_at": __import__('"'"'datetime'"'"').datetime.now().isoformat(),
     }
-    
+
     content = json.dumps(tool_def, indent=2)
-    page_path = f"{TOOLS_PAGE_PATH_PREFIX}{tool_name}"
-    page_title = f"Tool: {tool_name}"
-    
-    result = _create_or_update_page(page_path, page_title, content, tags)
-    
-    if 'error' in result:
-        return {'success': False, 'message': f"Wiki error: {result['error']}"}
-    
-    return {
-        'success': True,
-        'message': f"Tool '{tool_name}' saved to Wiki at {page_path}",
-        'page_path': page_path,
-    }
+    result = _create_or_update_page(f'"'"'/tools/{tool_name}'"'", content, book_id)
 
+    if '"'"'error'"'"' in result:
+        return {'"'"'success'"'"': False, '"'"'message'"'"': f"Save failed: {result['"'"'error'"'"']}"}
 
-def load_tool_from_wiki(tool_name: str) -> Optional[dict]:
-    """
-    Load a tool definition from Wiki.js.
-    
-    Returns the tool definition dict or None if not found.
-    """
-    page_path = f"{TOOLS_PAGE_PATH_PREFIX}{tool_name}"
-    page = _find_page_by_path(page_path)
-    
-    if not page:
-        return None
-    
-    try:
-        content = page.get('content', '')
-        if content.startswith('```'):
-            # Strip markdown code blocks
-            lines = content.split('\n')
-            if lines[0].startswith('```'):
-                lines = lines[1:]
-            if lines and lines[-1].startswith('```'):
-                lines = lines[:-1]
-            content = '\n'.join(lines)
-        
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return None
-
-
-def list_tools_from_wiki() -> list:
-    """
-    List all shared tools available in Wiki.
-    
-    Returns list of tool definition dicts.
-    """
-    # First ensure /tools folder exists
-    if not _find_page_by_path('/tools'):
-        _create_folder('/tools', 'Shared Tools')
-    
-    # Query pages under /tools path
-    query = """
-    query {
-      pages {
-        list(path: "/tools", limit: 100) {
-          results {
-            id
-            title
-            path
-            content
-            tags {
-              title
-            }
-          }
-        }
-      }
-    }
-    """
-    
-    result = _wiki_query(query)
-    if 'error' in result:
-        return []
-    
-    pages = result.get('pages', {}).get('list', {}).get('results', [])
-    tools = []
-    
-    for page in pages:
-        if page.get('path', '').startswith('/tools/') and page.get('path') != '/tools':
-            try:
-                content = page.get('content', '')
-                if content:
-                    tool_def = json.loads(content)
-                    tool_def['_wiki_page_id'] = page.get('id')
-                    tool_def['_wiki_path'] = page.get('path')
-                    tools.append(tool_def)
-            except json.JSONDecodeError:
-                continue
-    
-    return tools
+    return {'"'"'success'"'"': True, '"'"'message'"'"': f"Tool '"'"'{tool_name}'"'"' saved to BookStack"}
 
 
 def delete_tool_from_wiki(tool_name: str) -> dict:
-    """
-    Delete a tool from Wiki.
-    
-    Returns: { success: bool, message: str }
-    """
-    page_path = f"{TOOLS_PAGE_PATH_PREFIX}{tool_name}"
-    page = _find_page_by_path(page_path)
-    
+    """Delete a tool from BookStack."""
+    if not BOOKSTACK_TOKEN:
+        return {'"'"'success'"'"': False, '"'"'message'"'"': '"'"'BOOKSTACK_TOKEN not configured'"'"'}
+
+    book_id, _ = _ensure_shelf_and_book()
+    if not book_id:
+        return {'"'"'success'"'"': False, '"'"'message'"'"': '"'"'Could not find tools book'"'"'}
+
+    page = _find_page_by_name(f'"'"'/tools/{tool_name}'"'", book_id)
     if not page:
-        return {'success': False, 'message': f"Tool '{tool_name}' not found in Wiki"}
-    
-    page_id = page.get('id')
-    if not page_id:
-        return {'success': False, 'message': f"Could not get page ID for '{tool_name}'"}
-    
-    mutation = """
-    mutation($id: Int!) {
-      pages {
-        delete(id: $id) {
-          id
-        }
-      }
-    }
-    """
-    
-    result = _wiki_query(mutation, {'id': int(page_id)})
-    if 'error' in result:
-        return {'success': False, 'message': f"Delete failed: {result['error']}"}
-    
-    return {'success': True, 'message': f"Tool '{tool_name}' deleted from Wiki"}
+        return {'"'"'success'"'"': False, '"'"'message'"'"': f"Tool '"'"'{tool_name}'"'"' not found"}
+
+    result = _bs_request('"'"'DELETE'"'"', f'"'"'pages/{page.get("id")}'"'"')
+    if '"'"'error'"'"' in result:
+        return {'"'"'success'"'"': False, '"'"'message'"'"': f"Delete failed: {result['"'"'error'"'"']}"}
+
+    return {'"'"'success'"'"': True, '"'"'message'"'"': f"Tool '"'"'{tool_name}'"'"' deleted from BookStack"}
 
 
-# ─── Dynamic Tool Loader ────────────────────────────────────────────────────
-
-# Cache of loaded tools
 _loaded_tool_funcs: dict = {}
 
 
 def load_tool_func(tool_def: dict) -> Optional[Callable]:
-    """
-    Load and return a tool function from its Wiki definition.
-    
-    The function is loaded from the specified module and function name.
-    """
-    tool_name = tool_def.get('name')
-    module_path = tool_def.get('module')
-    function_name = tool_def.get('function')
-    
+    """Load and return a tool function from its BookStack definition."""
+    tool_name = tool_def.get('"'"'name'"'"')
+    module_path = tool_def.get('"'"'module'"'"')
+    function_name = tool_def.get('"'"'function'"'"')
+
     if not module_path or not function_name:
         return None
-    
+
     cache_key = f"{module_path}.{function_name}"
     if cache_key in _loaded_tool_funcs:
         return _loaded_tool_funcs[cache_key]
-    
+
     try:
         module = importlib.import_module(module_path)
         func = getattr(module, function_name, None)
@@ -337,69 +281,43 @@ def load_tool_func(tool_def: dict) -> Optional[Callable]:
         return None
 
 
-# ─── Tool Registry Manager ──────────────────────────────────────────────────
-
 class ToolRegistry:
-    """
-    Manages tools for a worker with Wiki.js persistence.
-    
-    Usage:
-        registry = ToolRegistry()
-        registry.load_from_wiki()  # Load all shared tools
-        registry.register_tool('my_tool', my_func)  # Register locally
-        registry.save_tool_to_wiki('my_tool', ...)  # Save for sharing
-    """
-    
+    """Manages tools for a worker with BookStack persistence."""
+
     def __init__(self, hermes_agent=None):
         self.agent = hermes_agent
         self.local_tools: dict[str, Callable] = {}
-        self.wiki_tools: dict[str, dict] = {}  # tool_name -> tool_def
-    
+        self.wiki_tools: dict[str, dict] = {}
+
     def load_from_wiki(self) -> list:
-        """
-        Load all tools from Wiki and register them locally.
-        
-        Returns list of tool names that were successfully loaded.
-        """
+        """Load all tools from BookStack and register them locally."""
         tools = list_tools_from_wiki()
         loaded = []
-        
+
         for tool_def in tools:
-            tool_name = tool_def.get('name')
+            tool_name = tool_def.get('"'"'name'"'"')
             func = load_tool_func(tool_def)
-            
+
             if func:
                 self.wiki_tools[tool_name] = tool_def
                 self.local_tools[tool_name] = func
                 if self.agent:
                     self.agent.register_tool(tool_name, func)
                 loaded.append(tool_name)
-        
+
         return loaded
-    
+
     def save_tool(self, tool_name: str, module_path: str, function_name: str, **kwargs) -> dict:
-        """
-        Save a tool to Wiki and optionally register it locally.
-        
-        Args:
-            tool_name: Name for the tool
-            module_path: Python module path 
-            function_name: Function name in the module
-            **kwargs: Additional tool metadata (description, parameters, tags)
-        
-        Returns: { success: bool, message: str }
-        """
-        # Save to Wiki
+        """Save a tool to BookStack and optionally register it locally."""
         result = save_tool_to_wiki(
             tool_name=tool_name,
             module_path=module_path,
             function_name=function_name,
-            created_by=os.environ.get('TICKET_ID'),
+            created_by=os.environ.get('"'"'TICKET_ID'"'"'),
             **kwargs
         )
-        
-        if result['success']:
-            # Also load it locally
+
+        if result['"'"'success'"'"']:
             tool_def = load_tool_from_wiki(tool_name)
             if tool_def:
                 func = load_tool_func(tool_def)
@@ -408,84 +326,37 @@ class ToolRegistry:
                     self.local_tools[tool_name] = func
                     if self.agent:
                         self.agent.register_tool(tool_name, func)
-        
+
         return result
-    
+
     def register_local(self, tool_name: str, func: Callable, share: bool = False, **kwargs) -> dict:
-        """
-        Register a tool locally, optionally saving to Wiki.
-        
-        Args:
-            tool_name: Name for the tool
-            func: The function to register
-            share: If True, also save to Wiki for sharing
-            **kwargs: Additional tool metadata
-        """
+        """Register a tool locally, optionally saving to BookStack."""
         self.local_tools[tool_name] = func
         if self.agent:
             self.agent.register_tool(tool_name, func)
-        
-        result = {'success': True, 'message': f"Tool '{tool_name}' registered locally"}
-        
+
+        result = {'"'"'success'"'"': True, '"'"'message'"'"': f"Tool '"'"'{tool_name}'"'"' registered locally"}
+
         if share:
-            # Try to determine module and function name
             module_path = func.__module__
             function_name = func.__name__
             wiki_result = self.save_tool(tool_name, module_path, function_name, **kwargs)
-            result['wiki'] = wiki_result
-        
+            result['"'"'wiki'"'"'] = wiki_result
+
         return result
-    
+
     def unregister_tool(self, tool_name: str, delete_from_wiki: bool = False) -> dict:
-        """
-        Unregister a tool locally and optionally from Wiki.
-        """
+        """Unregister a tool locally and optionally from BookStack."""
         if tool_name in self.local_tools:
             del self.local_tools[tool_name]
-        
+
         if tool_name in self.wiki_tools:
             del self.wiki_tools[tool_name]
-        
-        if self.agent and tool_name in self.agent.tools:
+
+        if self.agent and tool_name in getattr(self.agent, '"'"'tools'"'"', {}):
             del self.agent.tools[tool_name]
-        
-        result = {'success': True, 'message': f"Tool '{tool_name}' unregistered locally"}
-        
+
         if delete_from_wiki:
-            wiki_result = delete_tool_from_wiki(tool_name)
-            result['wiki_delete'] = wiki_result
-        
-        return result
-    
-    def list_local_tools(self) -> list:
-        """List all locally registered tools"""
-        return list(self.local_tools.keys())
-    
-    def list_wiki_tools(self) -> list:
-        """List all tools available from Wiki"""
-        return list(self.wiki_tools.keys())
+            return delete_tool_from_wiki(tool_name)
 
-
-# ─── Singleton instance ─────────────────────────────────────────────────────
-
-_registry_instance: Optional[ToolRegistry] = None
-
-
-def get_tool_registry(hermes_agent=None) -> ToolRegistry:
-    """Get or create the singleton ToolRegistry instance"""
-    global _registry_instance
-    if _registry_instance is None:
-        _registry_instance = ToolRegistry(hermes_agent)
-    return _registry_instance
-
-
-# ─── Convenience Functions ──────────────────────────────────────────────────
-
-def init_tool_registry(hermes_agent=None) -> ToolRegistry:
-    """
-    Initialize the tool registry and load tools from Wiki.
-    Call this during worker startup.
-    """
-    registry = get_tool_registry(hermes_agent)
-    registry.load_from_wiki()
-    return registry
+        return {'"'"'success'"'"': True, '"'"'message'"'"': f"Tool '"'"'{tool_name}'"'"' unregistered"}

@@ -246,7 +246,7 @@ def should_terminate_worker(worker_id):
 
 ### Per-Project Config
 
-Stored in Wiki.js: `/projects/[id]/resource-config.yaml`
+Stored in BookStack: `/projects/[id]/resource-config.yaml`
 
 ```yaml
 project:

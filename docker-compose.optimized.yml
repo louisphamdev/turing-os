@@ -102,8 +102,19 @@ services:
           memory: 128M
           cpus: '0.25'
 
-  # === Docs - Wiki.js ===
-  wiki:
+  # === Docs - BookStack ===
+  bookstack-db:
+    <<: *default-logging
+    <<: *default-limits
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+
+  bookstack:
     <<: *default-logging
     <<: *default-limits
     deploy:
@@ -113,8 +124,6 @@ services:
           cpus: '0.5'
         reservations:
           memory: 256M
-    tmpfs:
-      - /data/tmp:size=50M,noexec,nosuid,mode=1777
 
   # === Matrix/Synapse ===
   synapse:

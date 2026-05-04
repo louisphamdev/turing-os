@@ -21,7 +21,10 @@ services:
     profiles: ["disabled"]
   taiga-gateway:
     profiles: ["disabled"]
-  wiki:
+  bookstack:
+    profiles: ["disabled"]
+
+  bookstack-db:
     profiles: ["disabled"]
   synapse:
     profiles: ["disabled"]
@@ -43,7 +46,7 @@ services:
       - TAIGA_API_URL=${TAIGA_API_URL:-http://taiga-gateway:9000/api/v1}
       - MATRIX_API_URL=${SYNAPSE_API_URL:-http://synapse:8008}
       - ORCHESTRATOR_URL=http://turing-orchestrator:3001
-      - WIKI_URL=${WIKI_URL:-http://wiki:3000}
+      - BOOKSTACK_URL=${BOOKSTACK_URL:-http://bookstack:80}
       - DOCKER_HOST=unix:///var/run/docker.sock
       - DOCKER_NETWORK=turing_network
     volumes:

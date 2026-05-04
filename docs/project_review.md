@@ -6,7 +6,7 @@ Based on a comprehensive review of the Turing OS codebase, recent commits, and a
 
 1. **Robust Architectural Vision**: The shift from a flat LLM chat interface to an **event-driven, role-based hierarchy** (PO → PM → HR → Workers) is highly scalable and mirrors real-world IT structures.
 2. **Matrix Bidirectional HITL**: The recent integration of Matrix/Synapse is a significant upgrade. It provides a reliable, two-way communication channel between human administrators and ephemeral worker agents without deadlocks. The `Intent Parser` allows natural language admin commands to be executed flawlessly.
-3. **Gateway Proxy Pattern**: Introducing a centralized orchestrator gateway for LLM, Taiga, Wiki.js, and Matrix traffic is excellent for security. Implementing **RBAC (Role-Based Access Control)** and short-lived **Consumer Tokens** ensures workers only have access to what they explicitly need.
+3. **Gateway Proxy Pattern**: Introducing a centralized orchestrator gateway for LLM, Taiga, BookStack, and Matrix traffic is excellent for security. Implementing **RBAC (Role-Based Access Control)** and short-lived **Consumer Tokens** ensures workers only have access to what they explicitly need.
 4. **Auto-Scaling & Health Monitoring**: The system dynamically scales workers up and down based on resource usage (CPU/RAM). The `Alert Manager` proactively catches Docker lifecycle anomalies (like OOM events), making the OS significantly more resilient.
 
 ---

@@ -11,7 +11,7 @@ Worker Container
 │   └── hermes_loop.py   # ReAct reasoning engine + LLM integration
 └── tools/
     ├── taiga_tools.py      # Ticket management
-    ├── wiki_tools.py      # Document access (Wiki.js)
+    ├── bookstack_tools.py      # Document access (BookStack)
     └── local_exec.py       # Sandbox command execution
 ```
 
@@ -85,7 +85,7 @@ for msg in history:
 **IMPORTANT**: Worker containers are ephemeral. On exit:
 - No files persist
 - No memory retained
-- All state MUST be stored in Taiga or Wiki.js
+- All state MUST be stored in Taiga or BookStack
 
 The container's `HostConfig.AutoRemove: true` ensures cleanup.
 

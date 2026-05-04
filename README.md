@@ -35,7 +35,7 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 - **Workers** execute tasks using ReAct loop
 - Multi-language support: Python, JavaScript, TypeScript, Go, Rust, .NET, Java
 - Auto research with Context7 for unknown tech
-- Tools: **Wiki.js** (docs), **Taiga** (tickets), sandbox terminal
+- Tools: **BookStack** (docs), **Taiga** (tickets), sandbox terminal
 
 ### 3. Bidirectional Human-in-the-Loop (HITL)
 - **Matrix** enables real-time two-way communication between admin and workers
@@ -45,19 +45,108 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 - **Element Web** provides a modern chat interface for admin interaction
 
 ### 4. Self-Healing & Monitoring
-- **Worker Health**: Auto restart dead workers
+- **Worker Health**: Auto restart dead workers with 3-tier recovery:
+  1. **Flapping Detection** — 3+ deaths/60min = stop, alert human
+  2. **Doctor Diagnosis** — spawn temp Doctor to find root cause (OOM, crash, dependency)
+  3. **Checkpoint Recovery** — restore agent state, resume from iteration N
+- **Worker Checkpoint** — auto-saves every 5 iterations; compressed message history, iteration count, context
 - **Priority Queue**: Running, queued, and paused task state is exposed via orchestrator APIs
 - **Alert Manager**: Real-time monitoring of Docker lifecycle events (e.g., OOM kills) and system anomalies.
 - **Auto-Scaling**: Orchestrator dynamically scales workers up/down based on CPU/RAM utilization and idle thresholds.
+- **Doctor Agent**: See Section 5 for the full autonomous self-healing system.
 
-### 5. Advanced Security & Orchestration Gateway (NEW)
-- **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Taiga, Wiki.js, Matrix) is routed through the orchestrator.
+### 5. Doctor Agent — Autonomous Self-Healing (NEW) 🌟
+Doctor is Turing OS's **autonomous system doctor** — a specialized worker that runs 24/7, diagnoses failures, heals the system, and learns from every incident. It is the **crown jewel** differentiator of Turing OS.
+
+#### What Doctor Does
+
+```
+Error detected ──► Doctor triages ──► Diagnoses root cause
+                                              │
+                    ┌─────────────────────────┼────────────────────────────┐
+                    ▼                         ▼                            ▼
+         Known Issues DB              Fix Scripts (6 built-in)    Dynamic Tool Creation
+         (BookStack)                    restart_service              create new .ps1 on-the-fly
+                                       cleanup_docker
+                                       restart_container
+                                       check_disk_usage
+                                       reset_network
+                                       restart_docker
+                    │                         │                            │
+                    └─────────────────────────┼────────────────────────────┘
+                                              ▼
+                                    Config Patching (.env, YAML, JSON)
+                                              │
+                    ┌─────────────────────────┼────────────────────────────┐
+                    ▼                         ▼                            ▼
+              Cross-Worker           GitHub Issue                  Human Escalation
+           devops.scale_worker     (fully documented)             (via Matrix)
+           qa.run_tests
+           se.analyze_code
+                                              │
+                                    System restored ──► Learns & tracks
+```
+
+#### Doctor Tool Suite (23 tools)
+
+| Tool | Capability |
+|------|-----------|
+| `check_system_health()` | CPU, memory, disk, Docker, network snapshot |
+| `parse_docker_logs()` | Fetch & parse logs from any container (local or via orchestrator relay) |
+| `check_service_connectivity()` | Taiga, Wiki, Matrix, Context7, GitHub, Orchestrator |
+| `check_recent_errors()` | Aggregate ERROR/WARN across ALL containers |
+| `query_known_issues_db()` | Search BookStack for past errors & fixes |
+| `save_to_known_issues()` | Record new learnings to BookStack |
+| `create_github_issue()` | Structured GitHub issues with labels |
+| `run_fix_script()` | Execute scripts from `scripts/doctor-fixes/` |
+| `verify_fix()` | Confirm a fix worked |
+| `track_metrics()` | Record success/failure rates to BookStack |
+| `get_doctor_dashboard()` | Full system summary |
+| `ask_user_confirmation()` | Yes/no questions to admin via Matrix |
+| `run_self_healing_pipeline()` | **CROWN JEWEL** — full diagnose→fix→track workflow |
+| `run_full_remediation()` | Full auto-remediation trying ALL approaches |
+| `create_dynamic_fix_script()` | Generate new fix scripts on-the-fly with syntax verification |
+| `patch_config_file()` | Patch `.env`, YAML, JSON in-place — no restart needed |
+| `invoke_worker_tool()` | Call tools from devops/qa/se/pm workers |
+| `list_docker_containers()` | Discover ALL containers & classify by role |
+| `get_container_inspect()` | Full `docker inspect` for any container |
+| `tail_container_logs()` | Stream logs with ERROR/WARN filtering |
+| `find_containers_by_role()` | Find containers by worker role |
+
+#### Container Discovery Architecture
+
+Doctor can inspect **any container** in the system — worker or infrastructure — regardless of whether it has a local Docker socket:
+
+```
+Doctor (on host) ── docker ps -a ──────────────────► Local Docker socket
+Doctor (in container) ── GET /containers ──────────► Orchestrator relay
+                        GET /containers/:name/logs
+```
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /containers` | List all containers + role classification |
+| `GET /containers/:name/logs` | Fetch logs from any container |
+
+#### Fix Scripts (`scripts/doctor-fixes/`)
+
+| Script | Trigger |
+|--------|---------|
+| `restart_container.ps1` | Service returning 5xx |
+| `cleanup_docker.ps1` | Disk pressure |
+| `restart_docker.ps1` | Docker daemon unresponsive |
+| `check_disk_usage.ps1` | Disk alert |
+| `reset_network.ps1` | Network connectivity issues |
+| `restart_service.ps1` | Service unhealthy |
+
+### 6. Advanced Security & Orchestration Gateway (NEW)
+- **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Taiga, BookStack, Matrix) is routed through the orchestrator.
 - **Credential Vault & Consumer Tokens**: Workers authenticate using short-lived JWT tokens rather than direct API keys.
 - **Role-Based Access Control (RBAC)**: Fine-grained permissions per role (e.g., `software-engineer` can write code, `qa` can only read).
 - **Intent Parser**: LLM-powered module that reliably translates natural language admin commands via Matrix into structured actions.
 
-### 6. Planned Orchestration Features
-- **PM Failover**: Hot-standby PM takeover is documented but not implemented yet
+### 6. Orchestration Features Status
+- **PM Failover**: ✅ Doctor-managed via health-monitor → PMStateManager (no standby process needed)
 - **Timeout / Retry / Escalation**: Policy exists in docs, runtime flow is partially shipped.
 - **Retro Reports**: Post-execution reports are still a roadmap item.
 
@@ -71,14 +160,15 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 | **Priority System** | ❌ None | ✅ P0-P3 with interrupt | ✅ Urgent requests handled |
 | **Idempotency** | ❌ None | ✅ Registry-based deduplication | ✅ No duplicates |
 | **Resource Scaling** | Manual | PM-controlled auto-scaling | ✅ Dynamic |
-| **PM Failover** | ❌ None | ✅ Hot standby | ✅ No SPOF |
+| **PM Failover** | ❌ None | ✅ Doctor-managed | ✅ No SPOF |
 | **Worker Health** | ❌ None | ✅ Health monitor + auto restart | ✅ Self-healing |
+| **Worker Checkpoint** | ❌ None | ✅ Doctor-first + checkpoint restore | ✅ No work loss |
 | **Timeout/Escalation** | Manual | ✅ Auto timeout → escalate | ✅ Automated |
 | **Bug Resolution** | User self-reports to GitHub | ✅ Doctor agent → fix or issue | ✅ Autonomous |
 | **Communication** | Peer-to-peer (Matrix) | ✅ Bidirectional via Orchestrator | ✅ No deadlocks |
 | **Documentation** | Generic roles | ✅ Domain-specific JDs | ✅ Accurate skills |
 
-Current snapshot: Matrix HITL, worker health, priority routing, role loading, and BMAD workflow integration are shipped; PM failover, timeout escalation, and auto-scaling remain roadmap items.
+Current snapshot: Matrix HITL, worker health, priority routing, role loading, BMAD workflow integration, and PM failover (Doctor-managed) are shipped; timeout escalation, and retro reports remain roadmap items.
 
 ---
 
@@ -171,11 +261,13 @@ ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
 | Service | Port | Purpose |
 |---------|------|---------|
 | **Taiga** | 9000 | Ticket management & webhooks |
-| **Wiki.js** | 6875 | Documentation & secrets storage |
+| **BookStack** | 6875 | Documentation & secrets storage |
 | **Matrix (Synapse)** | 8008/8448 | Bidirectional admin ↔ worker communication |
 | **Element Web** | 8080 | Web chat interface for Matrix |
 | **Orchestrator** | 3001 | Event-driven API gateway & Matrix relay |
 | **Workers** | Ephemeral | Docker containers, auto-remove |
+| **Orchestrator** `/containers` | 3001 | Doctor container discovery API |
+| **Orchestrator** `/containers/:name/logs` | 3001 | Container log retrieval for Doctor |
 
 ### Communication Flow
 
@@ -280,7 +372,7 @@ curl http://localhost:3001/health
 | Service | URL |
 |---------|-----|
 | Taiga (Ticket Management) | http://localhost:9000 |
-| Wiki.js (Documentation) | http://localhost:6875 |
+| BookStack (Documentation) | http://localhost:6875 |
 | Element Web (Chat Interface) | http://localhost:8080 |
 | Matrix Synapse (API) | http://localhost:8008 |
 | Orchestrator (API) | http://localhost:3001/health |
@@ -305,11 +397,13 @@ turing-os/
 ├── base-worker/            # Python worker
 │   └── src/
 │       ├── agent/          # ReAct loop (Hermes)
-│       └── tools/          # Taiga, Wiki.js, Matrix, terminal
+│       └── tools/          # Taiga, BookStack, Matrix, terminal
 ├── roles/                  # Agent definitions
 │   ├── po.md, pm.md, hr.md
 │   ├── software-engineer.md
 │   └── languages/          # Tech stack skills
+├── scripts/                # Orchestrator health, smoke tests, cron maintenance
+│   └── doctor-fixes/      # Self-healing PowerShell scripts (Doctor)
 ├── synapse/                # Matrix Synapse config
 ├── element_config/         # Element Web config
 ├── taiga-gateway/          # Taiga nginx config
@@ -344,7 +438,7 @@ Services status:
 ║  Taiga:      ✓ Connected             ║
 ║  Matrix:     ✓ Connected (sync)      ║
 ║  Element:    ✓ Connected             ║
-║  Wiki.js:    ✓ Connected             ║
+║  BookStack:    ✓ Connected             ║
 ║  Context7:   ✓ Connected             ║
 ╚══════════════════════════════════════╝
 ```
@@ -374,12 +468,13 @@ Services status:
 
 ## 📊 Roadmap
 
-| Version | Goals |
-|---------|-------|
-| v1.0 | Core: Taiga + Workers + PM + HR |
-| v1.1 | Matrix bidirectional HITL + Worker Health |
-| v1.2 | Security Gateway Proxy + RBAC + Auto-scaling |
-| v2.0 | PM failover + Timeout/Escalation hardening + Retro reports |
+| Version | Goals | Status |
+|---------|-------|--------|
+| v1.0 | Core: Taiga + Workers + PM + HR | ✅ Shipped |
+| v1.1 | Matrix bidirectional HITL + Worker Health + Flapping Detection | ✅ Shipped |
+| v1.2 | Security Gateway Proxy + RBAC + Auto-scaling + Doctor Agent | ✅ Shipped |
+| v1.3 | Doctor Dynamic Tools + Config Patching + Cross-Worker Invocation | ✅ Shipped |
+| v2.0 | PM failover (Doctor) + Timeout/Escalation hardening + Retro reports | In Progress |
 
 ---
 
@@ -388,7 +483,6 @@ Services status:
 Contributions are welcome! Please read [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 **Bug Reports**: [GitHub Issues](https://github.com/louisphamdev/turing-os/issues)
-**LLM Feedback**: [LLM Feedback Template](https://github.com/louisphamdev/turing-os/issues/new?template=llm_feedback.yml)
 
 ---
 

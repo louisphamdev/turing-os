@@ -3,7 +3,7 @@
 ## Overview
 
 This document defines project-level settings that control task execution behavior.
-These settings can be configured per-project and are stored in Wiki.js.
+These settings can be configured per-project and are stored in BookStack.
 
 ---
 
@@ -167,14 +167,14 @@ thresholds:
 action_on_threshold:
   - Pause lowest priority task
   - Notify PM
-  - Log to Wiki.js
+  - Log to BookStack
 ```
 
 ---
 
 ## Configuration File Example
 
-Store in Wiki.js at `/projects/[project-id]/config.yaml`:
+Store in BookStack at `/projects/[project-id]/config.yaml`:
 
 ```yaml
 project:

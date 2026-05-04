@@ -417,7 +417,7 @@ Specialization Skills:
 | **Skills** | Generic + skills.sh | Domain-specific JD | Better matching |
 | **Retro Reports** | ❌ None | ✅ PM creates | Continuous learning |
 | **Escalation** | Manual human | Auto → PO | SLA-bound |
-| **Security** | Gateway holds keys | Keys in Wiki.js | Better isolation |
+| **Security** | Gateway holds keys | Keys in BookStack | Better isolation |
 
 ---
 

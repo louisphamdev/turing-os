@@ -64,13 +64,13 @@ else
     ((FAIL++))
 fi
 
-# Test 5: Wiki.js
-echo -n "Checking Wiki.js... "
+# Test 5: BookStack
+echo -n "Checking BookStack... "
 if curl -s http://localhost:6875 &>/dev/null; then
-    log "Wiki.js accessible"
+    log "BookStack accessible"
     ((PASS++))
 else
-    fail "Wiki.js not accessible"
+    fail "BookStack not accessible"
     ((FAIL++))
 fi
 

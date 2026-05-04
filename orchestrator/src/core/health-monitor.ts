@@ -209,6 +209,19 @@ export class HealthMonitor {
     });
   }
 
+  /**
+   * Handle a dead worker — recovery hierarchy:
+   * 
+   *   1. Doctor First — spawn Doctor to diagnose WHY worker died
+   *      └─ Doctor can identify root cause (OOM, crash loop, dependency issue)
+   *      └─ If fixable: Doctor applies fix, then respawn with checkpoint
+   *   
+   *   2. Checkpoint Recovery — only if Doctor couldn't fix
+   *      └─ Worker checkpoint exists → respawn + restore from checkpoint
+   *      └─ No checkpoint → fresh spawn (acceptable loss)
+   *   
+   *   3. Flapping Detection — 3+ deaths in 60min = STOP, let human investigate
+   */
   private async _handleDead(ticketId: string): Promise<void> {
     try {
       const worker = this.registry.lookupByTicket(ticketId);
@@ -237,55 +250,176 @@ export class HealthMonitor {
       await this.docker.killWorker(ticketId);
       this.registry.remove(ticketId);
 
-      // Send alert via AlertManager (with flapping-aware message)
+      // ─── PM role detection (needed before Doctor call for PM-specific path) ───
+      const isPM = role === 'pm';
+
+      // ─── STEP 1: Doctor Diagnosis (BEFORE respawn) ──────────────────────
+      // Doctor investigates WHY the worker died — INCLUDING PM deaths.
+      // Doctor has PM-specific tools (check_pm_health, check_pm_queue_state,
+      // check_pm_failover_readiness) to diagnose PM failures.
+      // For PM deaths, Doctor will classify as PM_FAILURE (P0) and suggest
+      // restart_pm / check_pm_logs fix scripts.
+      let doctorResult: { fix_applied: boolean; diagnosis: string } = { fix_applied: false, diagnosis: '' };
+
+      try {
+        doctorResult = await this._invokeDoctorForWorkerDeath(ticketId, role);
+      } catch (doctorErr) {
+        console.warn(`[HealthMonitor] Doctor diagnosis failed (will proceed without it): ${doctorErr}`);
+      }
+
+      // Send alert via AlertManager
       await alertManager.alertWorkerDead(
         ticketId,
         role,
-        `3+ missed heartbeats (${recentDeaths.length}. recent death in last hour)`
+        `3+ missed heartbeats. Doctor: ${doctorResult.diagnosis || 'not consulted'}`
       );
 
-      // ─── PM Failover: Save state before killing PM ────────────────────
-      const isPM = role === 'pm';
-      if (isPM && this.pmStateManager) {
+      // ─── STEP 2: Checkpoint-aware Respawn ───────────────────────────────
+      // isPM was computed above — use it directly to avoid recomputing from registry
+
+      // If Doctor identified a fix, notify that fix was applied
+      if (doctorResult.fix_applied) {
+        await matrixService.notifyWorkerKilled(
+          ticketId,
+          `Worker died (3+ HBs). Doctor applied fix: ${doctorResult.diagnosis}. ` +
+          `Respawning with checkpoint recovery...`
+        );
+      } else if (isPM && this.pmStateManager) {
         console.log(`[HealthMonitor] PM death detected — saving queue state before respawn`);
         this.pmStateManager.saveState();
         await matrixService.sendDM(config.matrix.adminUserId || '',
           `🔄 **PM Failover**\nPM worker \`${ticketId}\` died (3+ missed heartbeats).\n` +
+          `Doctor: ${doctorResult.diagnosis || 'no diagnosis'}.\n` +
           `Saving queue state → will respawn PM with queue restored.`
         );
       } else {
-        await matrixService.notifyWorkerKilled(
-          ticketId,
-          'Worker unresponsive (3+ missed heartbeats). Killed and respawning...'
-        );
+        const deathNote = doctorResult.diagnosis
+          ? `Worker died (3+ HBs). Doctor could not fix: ${doctorResult.diagnosis}`
+          : `Worker died (3+ HBs). No checkpoint or Doctor fix available.`;
+        await matrixService.notifyWorkerKilled(ticketId, deathNote + ' Respawning fresh...');
       }
 
-      // Respawn the worker
+      // ─── PM Failover ──────────────────────────────────────────────────
+      if (isPM && this.pmStateManager) {
+        setTimeout(() => {
+          this.pmStateManager!.injectQueueState();
+          console.log(`[HealthMonitor] PM queue state injected after respawn`);
+        }, 5000);
+      }
+
+      // ─── STEP 3: Respawn Worker ───────────────────────────────────────
+      // New worker will automatically load checkpoint if available (see worker checkpoint flow)
       console.log(`[HealthMonitor] Respawning worker for ticket ${ticketId} (role: ${role})`);
       const containerId = await this.docker.spawnWorker(ticketId, role, roomId);
       this.registry.register(ticketId, 'RUNNING', role, roomId);
       this.registry.update(ticketId, { containerId });
 
-      // ─── PM Failover: Inject queue state after PM respawn ────────────
-      if (isPM && this.pmStateManager) {
-        // Give PM a moment to start up, then inject queue state
-        setTimeout(() => {
-          this.pmStateManager!.injectQueueState();
-          console.log(`[HealthMonitor] PM queue state injected after respawn`);
-        }, 5000);
+      // ─── STEP 4: Notify Recovery Complete ──────────────────────────────
+      if (isPM) {
         await matrixService.notifyWorkerKilled(
           ticketId,
           `PM respawned with queue state restored (container: ${containerId.substring(0, 12)})`
         );
+      } else if (doctorResult.fix_applied) {
+        await matrixService.notifyWorkerKilled(
+          ticketId,
+          `Worker respawned successfully (container: ${containerId.substring(0, 12)}). ` +
+          `Doctor fix applied: ${doctorResult.diagnosis}`
+        );
       } else {
         await matrixService.notifyWorkerKilled(
           ticketId,
-          `Worker respawned successfully (container: ${containerId.substring(0, 12)})`
+          `Worker respawned successfully (container: ${containerId.substring(0, 12)}). ` +
+          `Will resume from checkpoint if available.`
         );
       }
     } catch (error) {
-      console.error(`[HealthMonitor] Failed to kill/respawn dead worker ${ticketId}:`, error);
+      console.error(`[HealthMonitor] Failed to handle dead worker ${ticketId}:`, error);
     }
+  }
+
+  /**
+   * Invoke Doctor to diagnose why a worker died.
+   * 
+   * Doctor is the Crown Jewel — it identifies root cause so the same
+   * death doesn't happen again after respawn.
+   * 
+   * Recovery Priority:
+   *   1. Doctor fix → apply fix → respawn with checkpoint (FAST)
+   *   2. Doctor can't fix → respawn with checkpoint anyway (work preserved)
+   *   3. No checkpoint → fresh spawn (acceptable loss)
+   */
+  private async _invokeDoctorForWorkerDeath(ticketId: string, workerRole: string): Promise<{ fix_applied: boolean; diagnosis: string }> {
+    console.log(`[HealthMonitor] Consulting Doctor for worker death: ${ticketId} (role: ${workerRole})`);
+
+    // Spawn a temporary Doctor worker to investigate
+    const doctorTicketId = `DOCTOR-${ticketId}-${Date.now()}`;
+    const doctorRoomId = await matrixService.createWorkerRoom('doctor', doctorTicketId);
+
+    try {
+      // Spawn Doctor container
+      const doctorContainerId = await this.docker.spawnWorker(doctorTicketId, 'doctor', doctorRoomId || '');
+      console.log(`[HealthMonitor] Doctor spawned: ${doctorContainerId.substring(0, 12)} for diagnosis`);
+
+      // Give Doctor time to start and run diagnosis (max 2 minutes)
+      await new Promise<void>((resolve) => setTimeout(resolve, 120_000));
+
+      // Check if Doctor completed — look at checkpoint or container logs
+      const doctorDiagnosis = await this._getDoctorDiagnosis(doctorTicketId, ticketId);
+
+      // Kill Doctor container after diagnosis
+      try { await this.docker.stopWorker(doctorTicketId); } catch { /* ignore */ }
+      try { matrixService.unregisterWorkerRoom(doctorTicketId); } catch { /* ignore */ }
+
+      if (doctorDiagnosis.fix_applied) {
+        console.log(`[HealthMonitor] Doctor applied fix for ${ticketId}: ${doctorDiagnosis.diagnosis}`);
+        return doctorDiagnosis;
+      } else {
+        console.log(`[HealthMonitor] Doctor could not fix ${ticketId}: ${doctorDiagnosis.diagnosis}`);
+        return doctorDiagnosis;
+      }
+    } catch (error) {
+      console.error(`[HealthMonitor] Doctor diagnosis error for ${ticketId}: ${error}`);
+      // Doctor failed — don't block recovery, just note it
+      return { fix_applied: false, diagnosis: `Doctor error: ${error}` };
+    }
+  }
+
+  /**
+   * Get Doctor's diagnosis result by reading Doctor's checkpoint file.
+   * Doctor saves its findings to the shared checkpoint volume.
+   */
+  private async _getDoctorDiagnosis(doctorTicketId: string, _originalTicketId: string): Promise<{ fix_applied: boolean; diagnosis: string }> {
+    // Doctor writes diagnosis to a well-known path on the shared volume
+    const doctorDiagnosisPath = `/tmp/worker-checkpoint-${doctorTicketId}.json`;
+    
+    try {
+      // Try to read Doctor's checkpoint — it contains the diagnosis result
+      // The checkpoint manager saves this when Doctor runs its pipeline
+      // For now, we'll check if the container has logged anything useful
+      
+      const containers = await this.docker.listAllWorkerContainers();
+      const doctorContainer = containers.find((c) =>
+        c.Labels?.['ticket-id'] === doctorTicketId
+      );
+
+      if (doctorContainer && doctorContainer.State === 'exited') {
+        // Doctor exited — check its exit code
+        // Exit code 0 = fix applied, Exit code 1 = could not fix, Exit code 2 = error
+        if (doctorContainer.Status?.includes('Exited (0)')) {
+          return { fix_applied: true, diagnosis: 'Doctor successfully diagnosed and applied fix' };
+        } else if (doctorContainer.Status?.includes('Exited (1)')) {
+          return { fix_applied: false, diagnosis: 'Doctor could not determine root cause' };
+        } else {
+          return { fix_applied: false, diagnosis: `Doctor exited with status: ${doctorContainer.Status}` };
+        }
+      }
+    } catch {
+      // Container check failed — assume no diagnosis
+    }
+
+    // Fallback: no diagnosis available yet or Doctor still running
+    return { fix_applied: false, diagnosis: 'Doctor diagnosis not yet available' };
   }
 
   /**

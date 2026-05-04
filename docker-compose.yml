@@ -171,24 +171,56 @@ services:
       - taiga-back
       - taiga-events
 
-  # === Docs - Specification Storage (Wiki.js) ===
-  wiki:
-    image: requarks/wiki:latest
-    container_name: turing_wiki
-    ports:
-      - "6875:3000"
-    volumes:
-      - ./wiki_data:/data
+  # === Docs - Specification Storage (BookStack) ===
+  bookstack-db:
+    image: linuxserver/mariadb:latest
+    container_name: turing_bookstack_db
     environment:
-      - DB_TYPE=sqlite
-      - APP_URL=${WIKI_URL:-http://localhost:6875}
+      - PUID=1000
+      - PGID=1000
+      - MYSQL_ROOT_PASSWORD=${BOOKSTACK_DB_ROOT_PASSWORD:-bookstack_root_pass}
+      - MYSQL_DATABASE=${BOOKSTACK_DB_NAME:-bookstack}
+      - MYSQL_USER=${BOOKSTACK_DB_USER:-bookstack}
+      - MYSQL_PASSWORD=${BOOKSTACK_DB_PASSWORD:-bookstack_pass}
+    volumes:
+      - ./bookstack_data/mysql:/config
     networks:
       - turing_network
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
+
+  bookstack:
+    image: linuxserver/bookstack:latest
+    container_name: turing_bookstack
+    ports:
+      - "6875:80"
+    volumes:
+      - ./bookstack_data/www:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - APP_URL=${BOOKSTACK_URL:-http://localhost:6875}
+      - APP_KEY=${BOOKSTACK_APP_KEY:-some随机keypleasechange}
+      - DB_HOST=bookstack-db
+      - DB_PORT=3306
+      - DB_USER=${BOOKSTACK_DB_USER:-bookstack}
+      - DB_PASS=${BOOKSTACK_DB_PASSWORD:-bookstack_pass}
+      - DB_NAME=${BOOKSTACK_DB_NAME:-bookstack}
+      - DB_TYPE=mysql
+    networks:
+      - turing_network
+    depends_on:
+      - bookstack-db
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
 
   # === Comms - Matrix Chat (Synapse + Element) ===
   synapse:
@@ -254,7 +286,7 @@ services:
       - MATRIX_BOT_TOKEN=${MATRIX_BOT_TOKEN:-}
       - MATRIX_ADMIN_USER_ID=${MATRIX_ADMIN_USER_ID:-@admin:localhost}
       - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://turing-orchestrator:3001}
-      - WIKI_URL=${WIKI_URL:-http://wiki:3000}
+      - BOOKSTACK_URL=${BOOKSTACK_URL:-http://bookstack:80}
       - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
       - AUTO_START_ROLES=${AUTO_START_ROLES:-po,pm,hr,doctor}
       # ─── Alerting ──────────────────────────────────────────────────────
@@ -297,7 +329,7 @@ networks:
     driver: bridge
 
 volumes:
-  wiki_data:
+  bookstack_data:
   taiga_static_data:
   taiga_media_data:
   taiga_db_data:

@@ -344,14 +344,80 @@ export function webhooksRouter(
 
   // ─── Health heartbeat from worker ──────────────────────────────────────
   router.post('/health/heartbeat', (req: Request, res: Response) => {
-    const { ticket_id, status, progress } = req.body;
+    const { ticket_id, status, progress, checkpoint_count, last_checkpoint_iteration, last_checkpoint_age } = req.body;
 
     if (!ticket_id) {
       return res.status(400).json({ error: 'ticket_id is required' });
     }
 
     healthMonitor.onHeartbeat(ticket_id, { status, progress });
+    
+    // Track checkpoint info in registry for PM visibility
+    if (registry.lookupByTicket(ticket_id)) {
+      registry.update(ticket_id, {
+        lastCheckpointTime: Date.now(),
+        lastCheckpointIteration: last_checkpoint_iteration || 0,
+        checkpointCount: checkpoint_count || 0,
+      } as any);
+    }
+    
     res.status(200).json({ ack: true, timestamp: Date.now() });
+  });
+
+  // ─── Checkpoint events from worker ─────────────────────────────────────
+  router.post('/checkpoint', (req: Request, res: Response) => {
+    const { ticket_id, role, event, iteration, save_count, timestamp } = req.body;
+
+    if (!ticket_id) {
+      return res.status(400).json({ error: 'ticket_id is required' });
+    }
+
+    console.log(`[Checkpoint] ${event} for ticket=${ticket_id} (iteration=${iteration}, saves=${save_count})`);
+
+    // Track checkpoint in registry
+    if (registry.lookupByTicket(ticket_id)) {
+      registry.update(ticket_id, {
+        lastCheckpointTime: Date.now(),
+        lastCheckpointIteration: iteration || 0,
+        checkpointCount: save_count || 0,
+      } as any);
+    }
+
+    res.status(200).json({ ack: true, event, ticket_id });
+  });
+
+  // ─── Worker recovery: restart from checkpoint ──────────────────────────
+  // PM calls this to respawn a crashed worker that resumes from checkpoint
+  router.post('/workers/:ticketId/recover', async (req: Request, res: Response) => {
+    const ticketId = req.params.ticketId as string;
+    const worker = registry.lookupByTicket(ticketId);
+
+    if (!worker) {
+      return res.status(404).json({ error: `Worker ${ticketId} not found` });
+    }
+
+    console.log(`[Recovery] Initiating checkpoint-based recovery for ticket=${ticketId}`);
+
+    try {
+      // Stop old container if exists
+      await docker.stopWorker(ticketId).catch(() => {});
+
+      // Spawn new worker — it will load checkpoint automatically on startup
+      const containerId = await docker.spawnWorker(ticketId, worker.role, worker.roomId || '');
+
+      registry.update(ticketId, { containerId, status: 'RUNNING' });
+      registry.update(ticketId, { lastCheckpointTime: Date.now() } as any);
+
+      console.log(`[Recovery] ✓ Worker recovered for ticket=${ticketId}, container=${containerId.substring(0, 12)}`);
+      res.status(200).json({
+        message: 'Worker recovered from checkpoint',
+        ticket_id: ticketId,
+        container_id: containerId,
+      });
+    } catch (error) {
+      console.error(`[Recovery] Failed to recover worker ${ticketId}:`, error);
+      res.status(500).json({ error: `Recovery failed: ${error}` });
+    }
   });
 
   // ─── Health status endpoint ────────────────────────────────────────────

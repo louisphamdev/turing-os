@@ -352,6 +352,168 @@ app.delete('/workers/:ticketId', async (req, res) => {
   }
 });
 
+// ─── Container Discovery (for Doctor agent) ────────────────────────────────
+
+/**
+ * GET /containers
+ * Returns ALL Docker containers (workers + infrastructure) with their
+ * role classifications, so Doctor knows what exists to inspect.
+ *
+ * Query params:
+ *   role=<role>      — filter by role (e.g. doctor, devops, qa)
+ *   state=<state>    — filter by state (running, exited, paused)
+ *   includeLogs=<n>  — attach last N log lines per container (default: 0)
+ */
+app.get('/containers', async (req, res) => {
+  try {
+    const { role, state, includeLogs } = req.query;
+    const all = await docker.listAllContainers();
+
+    const rolePatterns: [string, RegExp][] = [
+      ['orchestrator', /orchestrat/i],
+      ['doctor',       /doctor/i],
+      ['devops',       /devops/i],
+      ['qa',           /(^|[-_])qa[-_]/i],
+      ['se',           /(^|[-_])se[-_]|software.engineer/i],
+      ['po',           /(^|[-_])po[-_]/i],
+      ['pm',           /(^|[-_])pm[-_]/i],
+      ['hr',           /(^|[-_])hr[-_]/i],
+      ['data',         /(^|[-_])data[-_]/i],
+      ['network',      /network/i],
+      ['security',     /security/i],
+      ['taiga',        /taiga/i],
+      ['wiki',         /wiki/i],
+      ['synapse',      /synapse|matrix/i],
+      ['redis',        /redis/i],
+      ['postgres',     /postgres/i],
+      ['nginx',        /nginx/i],
+      ['rabbitmq',     /rabbitmq/i],
+    ];
+
+    const classify = (name: string, image: string): string => {
+      const haystack = `${name} ${image}`.toLowerCase();
+      for (const [r, re] of rolePatterns) {
+        if (re.test(haystack)) return r;
+      }
+      return 'infrastructure';
+    };
+
+    let containers = all.map((c) => {
+      const name = (c.Names?.[0] || '').replace(/^\//, '');
+      const role = classify(name, c.Image);
+      return {
+        id: c.Id,
+        name,
+        image: c.Image,
+        role,
+        state: c.State,
+        status: c.Status,
+        created: c.Created,
+        labels: c.Labels || {},
+      };
+    });
+
+    if (role) {
+      containers = containers.filter((x) => x.role === role);
+    }
+    if (state) {
+      containers = containers.filter((x) => x.state === state);
+    }
+
+    // Attach recent logs if requested (lightweight — last N lines, errors only)
+    if (includeLogs) {
+      const n = Math.min(parseInt(String(includeLogs), 10) || 20, 100);
+      await Promise.allSettled(
+        containers.map(async (c) => {
+          try {
+            const logs = await new Promise<string>((resolve, reject) => {
+              const chunks: string[] = [];
+              c.id.length; // reference
+              import('child_process').then(({ exec }) => {
+                exec(
+                  `docker logs --tail ${n} --timestamps ${c.name} 2>&1`,
+                  { timeout: 10000 },
+                  (err, stdout, stderr) => {
+                    if (err && !stdout && !stderr) reject(err);
+                    else resolve((stdout + stderr).slice(-2000));
+                  }
+                );
+              }).catch(reject);
+            });
+            const errorLines = logs
+              .split('\n')
+              .filter((l) => /\b(ERROR|FATAL|WARN|WARNING)\b/i.test(l))
+              .slice(-n);
+            (c as any).recent_errors = errorLines.slice(-10);
+          } catch {
+            (c as any).recent_errors = [];
+          }
+        })
+      );
+    }
+
+    res.json({
+      total: containers.length,
+      containers,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    res.status(500).json({ error: `Failed to list containers: ${error}` });
+  }
+});
+
+/**
+ * GET /containers/:name/logs
+ * Returns logs for a specific container — used by Doctor to deep-dive
+ * into any worker or infrastructure container.
+ *
+ * Query params:
+ *   lines=<n>   — number of log lines (default: 50, max: 500)
+ *   errorsOnly  — if "true", return only ERROR/WARN lines
+ */
+app.get('/containers/:name/logs', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const lines = Math.min(parseInt(req.query.lines as string, 10) || 50, 500);
+    const errorsOnly = req.query.errorsOnly === 'true';
+
+    const { exec } = await import('child_process');
+    const cmd = `docker logs --tail ${lines} --timestamps ${name} 2>&1`;
+
+    exec(cmd, { timeout: 20000 }, (err, stdout, stderr) => {
+      if (err && !stdout && !stderr) {
+        return res.status(404).json({ error: `Container not found or log access failed: ${err.message}` });
+      }
+      const raw = (stdout + stderr);
+      const allLines = raw.split('\n').filter((l) => l.trim());
+
+      let entries = allLines.map((line) => {
+        const m = line.match(/^(\S+\s+\S+?)\s+(\w+)\s+(.*)$/);
+        if (m) {
+          return { timestamp: m[1], level: m[2].toUpperCase(), message: m[3].trim() };
+        }
+        let level = 'INFO';
+        if (/\b(ERROR|FATAL|CRITICAL)\b/i.test(line)) level = 'ERROR';
+        else if (/\b(WARN|WARNING)\b/i.test(line)) level = 'WARN';
+        return { timestamp: '', level, message: line.trim() };
+      });
+
+      if (errorsOnly) {
+        entries = entries.filter((e) => e.level === 'ERROR' || e.level === 'WARN');
+      }
+
+      res.json({
+        container: name,
+        total: entries.length,
+        entries,
+        timestamp: new Date().toISOString(),
+      });
+    });
+  } catch (error) {
+    res.status(500).json({ error: `Failed to get logs: ${error}` });
+  }
+});
+
 app.get('/health/ping', (_req, res) => {
   res.json({ pong: true, ts: Date.now(), uptime: process.uptime() });
 });

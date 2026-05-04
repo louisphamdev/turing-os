@@ -64,6 +64,7 @@ class HermesAgent:
         tool_timeout: int = 60,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
+        checkpoint_manager=None,
     ):
         self.ticket_id = ticket_id
         self.role = role
@@ -72,6 +73,7 @@ class HermesAgent:
         self.tool_timeout = tool_timeout
         self.model = model or os.environ.get('LLM_MODEL', 'gpt-4o')
         self.base_url = base_url or os.environ.get('LLM_BASE_URL', 'https://api.openai.com/v1')
+        self.checkpoint_manager = checkpoint_manager
 
         self.tools: dict[str, Callable] = {}
         self.tool_docs: dict[str, str] = {}
@@ -87,7 +89,7 @@ class HermesAgent:
 
     def _register_default_tools(self):
         """Register the built-in tools"""
-        from tools import taiga_tools, wiki_tools, local_exec, research_tools, matrix_tools
+        from tools import taiga_tools, bookstack_tools as wiki_tools, local_exec, research_tools, matrix_tools
 
         self.register_tool('update_ticket_status', taiga_tools.update_ticket_status)
         self.register_tool('read_ticket', taiga_tools.read_ticket)
@@ -97,10 +99,10 @@ class HermesAgent:
         self.register_tool('execute_terminal_command', local_exec.execute_terminal_command)
         self.register_tool('read_file', local_exec.read_file)
         self.register_tool('write_file', local_exec.write_file)
-        self.register_tool('read_document', wiki_tools.read_document)
-        self.register_tool('search_documents', wiki_tools.search_documents)
-        self.register_tool('list_documents', wiki_tools.list_documents)
-        self.register_tool('write_document', wiki_tools.write_document)
+        self.register_tool('read_document', wiki_tools.read_page)
+        self.register_tool('search_documents', wiki_tools.search_pages)
+        self.register_tool('list_documents', wiki_tools.list_pages)
+        self.register_tool('write_document', wiki_tools.update_page)
 
         # Research tools
         self.register_tool('load_skills_for_task', research_tools.load_skills_for_task_sync)
@@ -125,8 +127,46 @@ class HermesAgent:
         self.register_tool('check_dependency_wait', pm_monitor.check_dependency_wait)
         self.register_tool('get_high_priority_tasks', pm_monitor.get_high_priority_tasks)
 
+        # Doctor diagnostic & self-healing tools
+        from tools import doctor_tools
+        self.register_tool('check_system_health', doctor_tools.check_system_health)
+        self.register_tool('parse_docker_logs', doctor_tools.parse_docker_logs)
+        self.register_tool('check_service_connectivity', doctor_tools.check_service_connectivity)
+        self.register_tool('check_recent_errors', doctor_tools.check_recent_errors)
+        self.register_tool('query_known_issues_db', doctor_tools.query_known_issues_db)
+        self.register_tool('save_to_known_issues', doctor_tools.save_to_known_issues)
+        self.register_tool('create_github_issue', doctor_tools.create_github_issue)
+        self.register_tool('run_fix_script', doctor_tools.run_fix_script)
+        self.register_tool('track_metrics', doctor_tools.track_metrics)
+        self.register_tool('get_doctor_dashboard', doctor_tools.get_doctor_dashboard)
+        self.register_tool('ask_user_confirmation', doctor_tools.ask_user_confirmation)
+        self.register_tool('report_fix_success', doctor_tools.report_fix_success)
+        self.register_tool('report_fix_failure', doctor_tools.report_fix_failure)
+        self.register_tool('run_self_healing_pipeline', doctor_tools.run_self_healing_pipeline)
+        self.register_tool('run_full_remediation', doctor_tools.run_full_remediation)
+        self.register_tool('create_dynamic_fix_script', doctor_tools.create_dynamic_fix_script)
+        self.register_tool('patch_config_file', doctor_tools.patch_config_file)
+        self.register_tool('invoke_worker_tool', doctor_tools.invoke_worker_tool)
+        # Container discovery tools — Doctor can now see ALL containers & workers
+        self.register_tool('list_docker_containers', doctor_tools.list_docker_containers)
+        self.register_tool('get_container_inspect', doctor_tools.get_container_inspect)
+        self.register_tool('tail_container_logs', doctor_tools.tail_container_logs)
+        self.register_tool('find_containers_by_role', doctor_tools.find_containers_by_role)
+
+        # PM health & failover tools — Doctor manages PM failover
+        self.register_tool('check_pm_health', doctor_tools.check_pm_health)
+        self.register_tool('check_pm_queue_state', doctor_tools.check_pm_queue_state)
+        self.register_tool('check_pm_failover_readiness', doctor_tools.check_pm_failover_readiness)
+
         # Initialize research tools with API key from environment
         research_tools.init_research_tools()
+
+        # ─── Checkpoint / Recovery Tools ─────────────────────────────────
+        from checkpoint import CheckpointManager
+        self._checkpoint_manager = None  # Set externally via set_checkpoint_manager()
+        self.register_tool('save_checkpoint', self._save_checkpoint_tool)
+        self.register_tool('load_checkpoint', self._load_checkpoint_tool)
+        self.register_tool('clear_checkpoint', self._clear_checkpoint_tool)
 
     def register_tool(self, name: str, func: Callable):
         """Register a tool function"""
@@ -256,6 +296,14 @@ class HermesAgent:
                 if len(result_str) > 4000:
                     result_str = result_str[:4000] + "\n... [truncated]"
                 self._add_message('tool', f"[{tool_call.name}] {result_str}")
+
+            # ─── Auto-checkpoint every N iterations ───────────────────────
+            if self.checkpoint_manager and self.checkpoint_manager.should_save(self.context['iteration']):
+                self.checkpoint_manager.save(
+                    self,
+                    last_action=f"Completed iteration {self.context['iteration']}, last_tool={tool_calls[-1].name if tool_calls else 'none'}"
+                )
+            # ───────────────────────────────────────────────────────────────
 
             # Check if a tool updated ticket to done/blocked
             if self._is_task_complete():
@@ -497,6 +545,78 @@ BLOCKED: <reason you cannot proceed>
     def get_history(self) -> list[AgentMessage]:
         """Get the conversation history"""
         return self.messages.copy()
+
+    # ─── Checkpoint Management ────────────────────────────────────────────
+
+    def set_checkpoint_manager(self, checkpoint_manager):
+        """Set the checkpoint manager for this agent"""
+        self.checkpoint_manager = checkpoint_manager
+
+    def _save_checkpoint_tool(self, last_action: str = '') -> dict:
+        """
+        Save a checkpoint of current agent state for crash recovery.
+        The checkpoint captures conversation history, iteration count, and context.
+        
+        Use this:
+        - Automatically every N iterations (built-in)
+        - Manually before a risky operation
+        - Before entering interactive mode (background task)
+        
+        Returns:
+            {"success": true, "checkpoint_num": N, "iteration": N, "path": "/tmp/worker-checkpoint.json"}
+        """
+        if not self.checkpoint_manager:
+            return {"success": False, "error": "No checkpoint manager configured"}
+        
+        ok = self.checkpoint_manager.save(self, last_action)
+        if ok:
+            return {
+                "success": True,
+                "checkpoint_num": self.checkpoint_manager._save_count,
+                "iteration": self.context.get('iteration', 0),
+                "last_action": last_action,
+                "message": f"Checkpoint saved at iteration {self.context.get('iteration', 0)}"
+            }
+        return {"success": False, "error": "Failed to save checkpoint"}
+
+    def _load_checkpoint_tool(self) -> dict:
+        """
+        Load a checkpoint and restore agent state.
+        Call this immediately after creating the agent to resume from a crash.
+        
+        Returns:
+            {"success": true, "restored": true, "iteration": N, "messages_restored": N}
+            or {"success": true, "restored": false, "reason": "no checkpoint found"}
+        """
+        if not self.checkpoint_manager:
+            return {"success": False, "error": "No checkpoint manager configured"}
+        
+        data = self.checkpoint_manager.load()
+        if not data:
+            return {"success": True, "restored": False, "reason": "no checkpoint found"}
+        
+        ok = self.checkpoint_manager.restore(self, data)
+        if ok:
+            return {
+                "success": True,
+                "restored": True,
+                "iteration": self.context.get('iteration', 0),
+                "messages_restored": len(self.messages),
+            }
+        return {"success": False, "error": "Failed to restore checkpoint"}
+
+    def _clear_checkpoint_tool(self) -> dict:
+        """
+        Clear the checkpoint file.
+        Call this after task is successfully completed.
+        
+        Returns:
+            {"success": true}
+        """
+        if not self.checkpoint_manager:
+            return {"success": False, "error": "No checkpoint manager configured"}
+        self.checkpoint_manager.clear()
+        return {"success": True}
 
 
 class OpenAIAgent(HermesAgent):

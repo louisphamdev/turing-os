@@ -50,7 +50,7 @@ def notify_orchestrator(endpoint: str, data: dict):
         log(f"Failed to notify orchestrator ({endpoint}): {e}", 'WARN')
 
 
-def create_agent():
+def create_agent(checkpoint_manager=None):
     """Factory function to create the appropriate agent based on LLM_PROVIDER"""
     from agent.hermes_loop import OpenAIAgent, AnthropicAgent, MiniMaxAgent
 
@@ -60,6 +60,7 @@ def create_agent():
         'api_key': LLM_API_KEY,
         'model': LLM_MODEL,
         'base_url': LLM_BASE_URL,
+        'checkpoint_manager': checkpoint_manager,
     }
 
     if LLM_PROVIDER == 'anthropic':
@@ -224,8 +225,13 @@ def main():
     log("[Heartbeat] Background thread started (every 120s)")
 
     try:
-        # ── Create agent ──────────────────────────────────────────────────
-        agent = create_agent()
+        # ── Create checkpoint manager ─────────────────────────────────────
+        from checkpoint import CheckpointManager
+        checkpoint_path = os.environ.get('CHECKPOINT_PATH', '/tmp/worker-checkpoint.json')
+        cm = CheckpointManager(ticket_id=TICKET_ID, role=ROLE, checkpoint_path=checkpoint_path)
+
+        # ── Create agent with checkpoint manager ────────────────────────────
+        agent = create_agent(checkpoint_manager=cm)
 
         # ── Read ticket from Taiga ────────────────────────────────────────
         log("Reading ticket information...")
@@ -243,6 +249,24 @@ def main():
         health.set_status('working')
         health.set_current_task(task_description[:100])
 
+        # ── Try to restore from checkpoint ────────────────────────────────
+        restored_from_checkpoint = False
+        checkpoint_data = cm.load()
+        if checkpoint_data and checkpoint_data.get('iteration', 0) > 0:
+            log(f"[Recovery] Found checkpoint from iteration {checkpoint_data.get('iteration')}")
+            if cm.restore(agent, checkpoint_data):
+                restored_from_checkpoint = True
+                # Update task context for resumed work
+                if checkpoint_data.get('context', {}).get('task'):
+                    task_description = checkpoint_data['context']['task']
+                log(f"[Recovery] ✓ Restored {len(agent.messages)} messages, continuing from iteration {agent.context.get('iteration')}")
+                # Notify PM that we resumed
+                notify_orchestrator('resumed', {
+                    'ticket_id': TICKET_ID,
+                    'resumed_from_iteration': agent.context.get('iteration'),
+                    'message': f'Worker resumed from checkpoint (iteration {agent.context.get("iteration")})',
+                })
+
         # ── Run the agent ─────────────────────────────────────────────────
         start_time = time_module.time()
         result = agent.run(initial_task=task_description)
@@ -250,12 +274,18 @@ def main():
 
         log(f"Agent finished: result={result}, elapsed={elapsed:.1f}s")
 
+        # ── Clear checkpoint on successful completion ─────────────────────
+        if result == 'done':
+            cm.clear()
+            log("[Checkpoint] Cleared on task completion")
+
         # ── Handle result ─────────────────────────────────────────────────
         if result == 'done':
             log("✓ Task completed successfully")
             notify_orchestrator('completed', {
                 'ticket_id': TICKET_ID,
                 'summary': f'Task completed in {elapsed:.0f}s',
+                'resumed_from_checkpoint': restored_from_checkpoint,
             })
 
         elif result == 'blocked':
@@ -333,7 +363,8 @@ You have access to Taiga (tickets), Wiki.js (documentation), and terminal comman
                     # ── Regular Chat Message ─────────────────────────────────────
                     try:
                         # Create fresh agent for each message, respecting LLM_PROVIDER
-                        chat_agent = create_agent()
+                        # Reuse the same checkpoint manager so recovery state persists
+                        chat_agent = create_agent(checkpoint_manager=cm)
                         chat_agent.system_prompt_override = chat_system
 
                         # Run interactive — get the response

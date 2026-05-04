@@ -359,6 +359,215 @@ worker_a.receive_from_pm("info", {...})
 
 ---
 
+## Worker Checkpoint & Fast Recovery
+
+Workers are **ephemeral containers** — they can die at any time (OOM, crash, killed). The checkpoint system ensures a worker can resume from where it left off without repeating work.
+
+### Checkpoint Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        WORKER                                    │
+│  ┌───────────────────────────────────────────────────────────┐   │
+│  │ CheckpointManager                                          │   │
+│  │ • Auto-saves every N iterations (configurable)            │   │
+│  │ • Captures: messages, iteration, context, last_action      │   │
+│  │ • Compresses + base64 to reduce size                      │   │
+│  │ • File: /tmp/worker-checkpoint.json (shared volume)        │   │
+│  └───────────────────────────────────────────────────────────┘   │
+│         │                                           │            │
+│         ▼ (notify on save)                          ▼ (load)   │
+│  ┌──────────────┐                           ┌────────────────┐  │
+│  │ Orchestrator │                           │  New Worker    │  │
+│  │ /webhooks/   │                           │  (spawned on  │  │
+│  │ checkpoint   │                           │   crash)      │  │
+│  └──────────────┘                           └────────────────┘  │
+│                                                    ▲             │
+│                                             loads checkpoint     │
+│                                                    │             │
+└────────────────────────────────────────────────────┼─────────────┘
+                                                     │
+                              ┌──────────────────────┴──────────────┐
+                              │        Recovery Flow                  │
+                              │                                      │
+                              │  1. Worker dies → PM detects (HB↓)   │
+                              │  2. Doctor diagnoses WHY worker died  │
+                              │     (OOM? Crash loop? Dependency?)   │
+                              │  3. If Doctor fixes → apply fix       │
+                              │  4. PM respawns worker with checkpoint│
+                              │  5. Worker loads checkpoint if exists │
+                              │  6. Continue from iteration N+1       │
+                              │                                      │
+                              │  NOTE: Checkpoint is LAST RESORT.    │
+                              │  Doctor MUST try to fix first.        │
+                              └─────────────────────────────────────┘
+```
+
+### Recovery Priority (Doctor First, Checkpoint Last)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    DEATH DETECTED (3+ missed HBs)                │
+└───────────────────────────────┬─────────────────────────────────┘
+                                │
+                                ▼
+                    ┌───────────────────────┐
+                    │  1. FLAPPING CHECK    │
+                    │  3+ deaths/60min?     │
+                    │  → STOP, alert human  │
+                    └──────────┬────────────┘
+                               │ No
+                               ▼
+                    ┌───────────────────────┐
+                    │  2. DOCTOR DIAGNOSIS  │◄─── BEFORE respawn
+                    │  Spawn temp Doctor    │
+                    │  container to investigate│
+                    │  WHY did worker die?   │
+                    └──────────┬────────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │ Doctor fixable │                │ Doctor can't fix
+              ▼                │                ▼
+    ┌─────────────────┐        │     ┌─────────────────────┐
+    │  Apply fix      │        │     │ Log diagnosis        │
+    │  (e.g., restart │        │     │ (root cause unknown)│
+    │  service, tune  │        │     └─────────────────────┘
+    │  memory, etc.)  │        │
+    └────────┬────────┘        │
+             │                 │
+             ▼                 ▼
+    ┌─────────────────────────────────┐
+    │  3. RESPAWN with checkpoint     │
+    │  New container starts           │
+    │  → Loads /tmp/checkpoint.json  │
+    │  → Resumes from iteration N    │
+    └─────────────────────────────────┘
+```
+
+### Checkpoint Contents
+
+```typescript
+interface Checkpoint {
+  ticket_id: string;        // Task identifier
+  role: string;             // Worker role
+  iteration: number;        // Current iteration count
+  messages_summary: string; // Compressed conversation history (last 30 msgs)
+  context: {
+    ticket_id: string;
+    role: string;
+    task: string;           // Task description
+    checkpoint_num: number;  // How many checkpoints taken
+  };
+  last_action: string;      // What agent was doing
+  created_at: number;       // Unix timestamp (for staleness check)
+}
+```
+
+### Checkpoint Events (Worker → Orchestrator)
+
+| Event | When | PM Action |
+|-------|------|-----------|
+| `checkpoint_saved` | After every auto-save | Track in registry |
+| `resumed` | New worker loaded checkpoint | Resume HB tracking |
+| `completed` | Task done, checkpoint cleared | Normal cleanup |
+
+### PM Recovery Flow (HealthMonitor._handleDead)
+
+```typescript
+// When HealthMonitor detects worker death (3 missed heartbeats):
+async function _handleDead(ticketId: string) {
+  // 1. Flapping check — 3+ deaths/60min = STOP, alert human
+  if (isFlapping(ticketId)) { return; }
+
+  // 2. Kill old container
+  await docker.killWorker(ticketId);
+
+  // 3. Doctor diagnosis (BEFORE respawn) — Crown Jewel
+  doctorResult = await _invokeDoctorForWorkerDeath(ticketId, role);
+  // Doctor identifies root cause (OOM, crash, dependency issue)
+  // If fixable: fix is applied before respawn
+
+  // 4. Checkpoint-aware respawn
+  const containerId = await docker.spawnWorker(ticketId, role, roomId);
+  // New worker → loads checkpoint if exists → resumes from iteration N
+
+  // 5. Worker sends 'resumed' event to /webhooks/checkpoint
+  // 6. PM updates registry, continues monitoring
+}
+
+// Checkpoint is LAST RESORT — Doctor must try to fix first
+// If Doctor fixes root cause → fix applied → respawn with checkpoint (FAST)
+// If Doctor can't fix → respawn anyway, checkpoint preserves work
+```
+
+### Checkpoint Staleness
+
+- **< 30 min**: Fresh enough to use
+- **> 30 min**: Marked stale — PM decides whether to use or restart fresh
+- **On completion**: Checkpoint automatically cleared
+
+### Checkpoint Webhooks
+
+| Method | Endpoint | Direction | Purpose |
+|--------|----------|-----------|---------|
+| POST | `/webhooks/checkpoint` | Worker → Orch | Notify checkpoint save/resume |
+| POST | `/webhooks/workers/:id/recover` | PM → Orch | Trigger checkpoint-based recovery |
+
+### Worker Checkpoint Tools
+
+Workers have 3 built-in tools for checkpoint management:
+
+```
+TOOL_CALL: save_checkpoint
+ARGUMENTS: {"last_action": "Completed iteration 5"}
+
+TOOL_CALL: load_checkpoint
+ARGUMENTS: {}
+
+TOOL_CALL: clear_checkpoint
+ARGUMENTS: {}
+```
+
+### Checkpoint Usage Guidelines
+
+| Scenario | Checkpoint Used? | Reason |
+|----------|-----------------|--------|
+| Worker dies, Doctor fixes root cause | ✅ Yes (after fix) | Fix prevents recurrence, checkpoint preserves progress |
+| Worker dies, Doctor can't fix | ✅ Yes | Preserve work as-is |
+| Worker OOM — Doctor increases memory limit | ✅ Yes + fix | Fix + progress preserved |
+| Worker crash loop — unknown cause | ✅ Yes | Work preserved, Doctor investigates |
+| Worker killed manually by admin | ❌ No | Admin intent = full stop |
+| Task completed successfully | ❌ No (cleared) | Task done, no need |
+
+> ⚠️ **Checkpoint is not magic** — it restores state, not fixes bugs. If the bug that killed the worker isn't fixed, the new worker will die the same way. Doctor first, checkpoint second.
+
+### Configuration
+
+| Env Variable | Default | Description |
+|--------------|---------|-------------|
+| `CHECKPOINT_INTERVAL` | `5` | Save every N iterations |
+| `CHECKPOINT_PATH` | `/tmp/worker-checkpoint.json` | Checkpoint file path |
+
+### Heartbeat Checkpoint Info
+
+Worker heartbeats now include checkpoint metadata:
+
+```typescript
+{
+  ticket_id: "TASK-123",
+  status: "working",
+  progress: "iteration_5",
+  checkpoint_count: 2,           // Total checkpoints saved
+  last_checkpoint_iteration: 5,  // Last checkpoint iteration
+  last_checkpoint_age: 120,      // Seconds since last save
+}
+```
+
+This lets PM monitor checkpoint health and detect workers that aren't checkpointing properly.
+```
+
+---
+
 ## Task Assignment Protocol
 
 ### PM Assigns, Workers Execute

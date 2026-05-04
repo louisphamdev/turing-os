@@ -137,7 +137,7 @@ configure_ports() {
     echo ""
     step "Configuring ports..."
     prompt "Taiga Gateway Port"      "9000"    && TAIGA_GATEWAY_PORT="$REPLY"
-    prompt "Wiki.js Port"              "6875"    && WIKI_PORT="$REPLY"
+    prompt "BookStack Port"              "6875"    && BOOKSTACK_PORT="$REPLY"
     prompt "Matrix/Synapse Port"     "8008"    && SYNAPSE_PORT="$REPLY"
     prompt "Orchestrator Port"       "3001"    && ORCHESTRATOR_PORT="$REPLY"
     log "Ports configured"
@@ -168,70 +168,71 @@ configure_llm() {
     log "LLM: $LLM_PROVIDER / $LLM_MODEL"
 }
 
-# ─── Initialize Wiki.js and get JWT token ─────────────────────────────────────────
+# ─── Initialize BookStack and get JWT token ─────────────────────────────────────────
 # This is called AFTER admin is configured (ADMIN_USER, ADMIN_PASSWORD are set)
-# and AFTER ports are configured (WIKI_PORT is set).
-initialize_wiki_and_get_token() {
+# and AFTER ports are configured (BOOKSTACK_PORT is set).
+initialize_bookstack_and_get_token() {
     echo ""
-    step "Initializing Wiki.js..."
+    step "Initializing BookStack..."
 
         local work_dir
         work_dir="$(get_work_dir)"
 
-        # Start Wiki.js using the current full compose configuration.
-    step "Starting Wiki.js container..."
+        # Start BookStack using the current full compose configuration.
+    step "Starting BookStack container..."
         cd "$work_dir"
-    docker compose up -d wiki
+    docker compose up -d bookstack-db bookstack
 
-    # Wait for Wiki.js to be ready
-    local wiki_url="http://localhost:$WIKI_PORT"
-    if ! wait_for_service "Wiki.js" "$wiki_url" 180; then
-        error_exit "Wiki.js did not start in time. Cannot proceed."
+    # Wait for BookStack to be ready
+    local BOOKSTACK_URL="http://localhost:$BOOKSTACK_PORT"
+    if ! wait_for_service "BookStack" "$BOOKSTACK_URL" 180; then
+        error_exit "BookStack did not start in time. Cannot proceed."
     fi
 
     # Determine admin email
-    local wiki_admin_email="admin@wiki.local"
+    local bookstack_admin_email="admin@bookstack.local"
     if [ -n "$ADMIN_USER" ]; then
-        wiki_admin_email="${ADMIN_USER}@wiki.local"
+        bookstack_admin_email="${ADMIN_USER}@bookstack.local"
     fi
 
     # Check if already setup
     local setup_needed=true
-    local session_check=$(curl -s --max-time 5 "$wiki_url/api/session" 2>/dev/null)
+    local session_check=$(curl -s --max-time 5 "$BOOKSTACK_URL/api/session" 2>/dev/null)
     if echo "$session_check" | grep -q '"user"'; then
-        log "Wiki.js already configured"
+        log "BookStack already configured"
         setup_needed=false
     fi
 
-    # Run Wiki.js first-time setup via API
+    # Run BookStack first-time setup via API
     if [ "$setup_needed" = true ]; then
-        step "Running Wiki.js first-time setup..."
-        local setup_resp=$(curl -s -X POST "$wiki_url/api/setup" \
+        step "Running BookStack first-time setup..."
+        local setup_resp=$(curl -s -X POST "$BOOKSTACK_URL/api/setup" \
             -H "Content-Type: application/json" \
-            -d "{\"email\":\"$wiki_admin_email\",\"password\":\"$ADMIN_PASSWORD\"}" \
+            -d "{\"email\":\"$bookstack_admin_email\",\"password\":\"$ADMIN_PASSWORD\"}" \
             --max-time 30 2>/dev/null)
 
         if echo "$setup_resp" | grep -q '"error"'; then
-            warn "Wiki.js setup API call had issues: $setup_resp"
-            echo "  Please complete setup manually at $wiki_url"
+            warn "BookStack setup API call had issues: $setup_resp"
+            echo "  Please complete setup manually at $BOOKSTACK_URL"
         else
-            log "Wiki.js admin account created"
+            log "BookStack admin account created"
         fi
     fi
 
-    # ─── Step 1: Try auto-login to get JWT token ───
+    # ─── Step 1: Try auto-token via BookStack API tokens endpoint ───
     step "Attempting automatic token retrieval..."
     local auto_token_success=false
 
-    local login_resp=$(curl -s -X POST "$wiki_url/api/login" \
+    # BookStack uses POST /api/tokens to create a token
+    local token_resp=$(curl -s -X POST "$BOOKSTACK_URL/api/tokens" \
         -H "Content-Type: application/json" \
-        -d "{\"email\":\"$wiki_admin_email\",\"password\":\"$ADMIN_PASSWORD\"}" \
+        -d "{\"email\":\"$bookstack_admin_email\",\"password\":\"$ADMIN_PASSWORD\"}" \
         --max-time 15 2>/dev/null)
 
-    if echo "$login_resp" | grep -q '"token"'; then
-        WIKI_JWT_TOKEN=$(echo "$login_resp" | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
-        if [ -n "$WIKI_JWT_TOKEN" ]; then
-            log "Wiki.js JWT token obtained automatically!"
+    if echo "$token_resp" | grep -q '"token"'; then
+        BOOKSTACK_TOKEN=$(echo "$token_resp" | grep -o '"token":"[^"]*"' | sed 's/"token":"//;s/"$//')
+        if [ -n "$BOOKSTACK_TOKEN" ]; then
+            log "BookStack API token obtained automatically!"
             auto_token_success=true
         fi
     fi
@@ -240,16 +241,16 @@ initialize_wiki_and_get_token() {
     if [ "$auto_token_success" = false ]; then
         echo ""
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-        echo -e "${YELLOW}  WIKI.JS MANUAL TOKEN SETUP (Required)${NC}"
+        echo -e "${YELLOW}  BookStack MANUAL TOKEN SETUP (Required)${NC}"
         echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
         echo ""
         echo -e "  ${CYAN}Automatic token retrieval failed. Please follow these steps:${NC}"
         echo ""
-        echo -e "  ${GREEN}Step 1:${NC} Open Wiki.js in your browser:"
-        echo -e "         ${CYAN}$wiki_url${NC}"
+        echo -e "  ${GREEN}Step 1:${NC} Open BookStack in your browser:"
+        echo -e "         ${CYAN}$BOOKSTACK_URL${NC}"
         echo ""
         echo -e "  ${GREEN}Step 2:${NC} Login with your admin credentials:"
-        echo -e "         Email:    ${CYAN}$wiki_admin_email${NC}"
+        echo -e "         Email:    ${CYAN}$bookstack_admin_email${NC}"
         echo -e "         Password: ${CYAN}[the password you entered during setup]${NC}"
         echo ""
         echo -e "  ${GREEN}Step 3:${NC} Go to ${CYAN}Administration${NC} (click your avatar top-right)"
@@ -272,14 +273,14 @@ initialize_wiki_and_get_token() {
         echo ""
 
         # Try to open browser
-        open_browser "$wiki_url"
-        echo -e "  Browser opened automatically." && log "Browser opened" || echo "  Please open manually: $wiki_url"
+        open_browser "$BOOKSTACK_URL"
+        echo -e "  Browser opened automatically." && log "Browser opened" || echo "  Please open manually: $BOOKSTACK_URL"
 
         echo ""
 
         # Prompt user for token with validation
         while true; do
-            echo -ne "  ${CYAN}Enter Wiki.js API Token:${NC} "
+            echo -ne "  ${CYAN}Enter BookStack API Token:${NC} "
             read -r entered_token
 
             if [ -z "$entered_token" ]; then
@@ -293,17 +294,15 @@ initialize_wiki_and_get_token() {
                 continue
             fi
 
-            # Test the token via GraphQL
+            # Test the token via BookStack REST API
             step "Validating token..."
-            local test_resp=$(curl -s -X POST "$wiki_url/graphql" \
+            local test_resp=$(curl -s -X GET "$BOOKSTACK_URL/api/pages" \
                 -H "Authorization: Bearer $entered_token" \
-                -H "Content-Type: application/json" \
-                -d '{"query":"{ pages { list(limit: 1) { id title } } }"}' \
                 --max-time 10 2>/dev/null)
 
-            if echo "$test_resp" | grep -q '"data"'; then
-                WIKI_JWT_TOKEN="$entered_token"
-                log "Wiki.js API token validated successfully!"
+            if echo "$test_resp" | grep -q '"id"\|"pages"\|"data"'; then
+                BOOKSTACK_TOKEN="$entered_token"
+                log "BookStack API token validated successfully!"
                 break
             else
                 warn "Token validation failed. Please check and try again."
@@ -312,10 +311,10 @@ initialize_wiki_and_get_token() {
     fi
 
     # Save token to .env immediately
-    if grep -q "WIKI_JWT_TOKEN=" "$work_dir/.env" 2>/dev/null; then
-        sed -i "s|^WIKI_JWT_TOKEN=.*|WIKI_JWT_TOKEN=$WIKI_JWT_TOKEN|" "$work_dir/.env"
+    if grep -q "BOOKSTACK_TOKEN=" "$work_dir/.env" 2>/dev/null; then
+        sed -i "s|^BOOKSTACK_TOKEN=.*|BOOKSTACK_TOKEN=$BOOKSTACK_TOKEN|" "$work_dir/.env"
     else
-        echo "WIKI_JWT_TOKEN=$WIKI_JWT_TOKEN" >> "$work_dir/.env"
+        echo "BOOKSTACK_TOKEN=$BOOKSTACK_TOKEN" >> "$work_dir/.env"
     fi
     log "Token saved to .env"
 }
@@ -421,9 +420,9 @@ services:
             - TAIGA_URL=http://localhost:${TAIGA_GATEWAY_PORT}
             - TAIGA_WEBSOCKETS_URL=ws://localhost:${TAIGA_GATEWAY_PORT}
 
-    wiki:
+    bookstack:
         ports:
-            - "${WIKI_PORT}:3000"
+            - "${BOOKSTACK_PORT}:80"
 
     synapse:
         ports:
@@ -478,8 +477,8 @@ SYNAPSE_REGISTRATION_SECRET=change-me-in-production
 MATRIX_BOT_TOKEN=
 MATRIX_ADMIN_USER_ID=
 
-WIKI_URL=http://localhost:$WIKI_PORT
-WIKI_JWT_TOKEN=$WIKI_JWT_TOKEN
+BOOKSTACK_URL=http://localhost:$BOOKSTACK_PORT
+BOOKSTACK_TOKEN=$BOOKSTACK_TOKEN
 
 CONTEXT7_API_KEY=$CONTEXT7_API_KEY
 
@@ -587,7 +586,7 @@ start_and_finalize() {
 
     echo ""
     wait_for_service "Taiga"    "http://localhost:$TAIGA_GATEWAY_PORT"  180
-    wait_for_service "Wiki.js" "http://localhost:$WIKI_PORT"     180
+    wait_for_service "BookStack" "http://localhost:$BOOKSTACK_PORT"     180
     wait_for_service "Matrix"   "http://localhost:$SYNAPSE_PORT"       120
 
     echo ""
@@ -605,7 +604,7 @@ start_and_finalize() {
     log "All services started!"
     echo ""
     echo -e "${YELLOW}Next steps:${NC}"
-    echo "  1. Run ${CYAN}bash install/config.sh test${NC} to verify Taiga, Matrix, Wiki.js and Context7"
+    echo "  1. Run ${CYAN}bash install/config.sh test${NC} to verify Taiga, Matrix, BookStack and Context7"
     echo "  2. Open ${CYAN}http://localhost:8080${NC} and sign in to Element with your admin account"
     echo "  3. Open ${CYAN}http://localhost:${TAIGA_GATEWAY_PORT}${NC} and create a TODO ticket"
     echo "  4. If account bootstrap failed, rerun ${CYAN}./init-admin-users.sh${NC}"
@@ -617,7 +616,7 @@ verify() {
     step "Verifying installation..."
 
     local all_ok=true
-    for port in $TAIGA_GATEWAY_PORT $WIKI_PORT $SYNAPSE_PORT $ORCHESTRATOR_PORT; do
+    for port in $TAIGA_GATEWAY_PORT $BOOKSTACK_PORT $SYNAPSE_PORT $ORCHESTRATOR_PORT; do
         if curl -s -o /dev/null -w "%{http_code}" "http://localhost:$port" 2>/dev/null | grep -q "200\|302\|404"; then
             log "Port $port responding"
         else
@@ -642,7 +641,7 @@ print_summary() {
     echo ""
     echo -e "${YELLOW}Access URLs:${NC}"
     echo "  Taiga:          http://localhost:${TAIGA_GATEWAY_PORT}"
-    echo "  Wiki.js:        http://localhost:${WIKI_PORT}"
+    echo "  BookStack:        http://localhost:${BOOKSTACK_PORT}"
     echo "  Matrix/Synapse: http://localhost:${SYNAPSE_PORT}"
     echo "  Element:        http://localhost:8080"
     echo "  Orchestrator:   http://localhost:${ORCHESTRATOR_PORT}"
@@ -682,7 +681,7 @@ main() {
     configure_worker
     configure_github
 
-    # Admin MUST be configured BEFORE Wiki.js init (needs ADMIN_PASSWORD)
+    # Admin MUST be configured BEFORE BookStack init (needs ADMIN_PASSWORD)
     configure_admin
 
     # Create installation directory
@@ -701,11 +700,11 @@ main() {
 
     echo ""
     echo -e "${YELLOW}============================================================${NC}"
-    echo -e "${YELLOW}  WIKI.JS INITIALIZATION${NC}"
+    echo -e "${YELLOW}  BookStack INITIALIZATION${NC}"
     echo -e "${YELLOW}============================================================${NC}"
 
-    # Initialize Wiki.js and get JWT token (requires ADMIN_PASSWORD from configure_admin)
-    initialize_wiki_and_get_token
+    # Initialize BookStack and get JWT token (requires ADMIN_PASSWORD from configure_admin)
+    initialize_bookstack_and_get_token
 
     echo ""
     echo -e "${YELLOW}============================================================${NC}"

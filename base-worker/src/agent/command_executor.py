@@ -179,7 +179,7 @@ def _handle_reload_role(agent: 'HermesAgent', args: dict, sender: str) -> str:
         role_spec_url: Optional URL to custom role spec
     """
     import os
-    from tools import wiki_tools
+    from tools import bookstack_tools as wiki_tools
 
     role = os.environ.get('ROLE', 'default')
     
@@ -187,7 +187,7 @@ def _handle_reload_role(agent: 'HermesAgent', args: dict, sender: str) -> str:
     role_url = args.get('role_spec_url')
     if role_url:
         try:
-            content = wiki_tools.read_document(role_url)
+            content = wiki_tools.read_page(role_url)
             if content:
                 agent.system_prompt_override = content
                 return f"✅ Role spec reloaded from custom URL ({len(content)} chars)"
@@ -203,7 +203,7 @@ def _handle_reload_role(agent: 'HermesAgent', args: dict, sender: str) -> str:
 
     for url in default_urls:
         try:
-            content = wiki_tools.read_document(url)
+            content = wiki_tools.read_page(url)
             if content:
                 agent.system_prompt_override = content
                 return f"✅ Role spec reloaded for `{role}` from wiki ({len(content)} chars)"

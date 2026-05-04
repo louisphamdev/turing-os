@@ -50,6 +50,10 @@ class WorkerHealth:
         self._last_progress = 0
         self._current_task = ''
         self._status = 'idle'  # 'working', 'idle', 'blocked'
+        # Checkpoint tracking
+        self._last_checkpoint_time = 0
+        self._last_checkpoint_iteration = 0
+        self._checkpoint_count = 0
 
     def start(self):
         """Start the heartbeat thread"""
@@ -75,6 +79,12 @@ class WorkerHealth:
     def set_current_task(self, task: str):
         """Update current task description for progress tracking"""
         self._current_task = task
+
+    def update_checkpoint_info(self, iteration: int):
+        """Update checkpoint tracking info — called after checkpoint save"""
+        self._last_checkpoint_time = time_module.time()
+        self._last_checkpoint_iteration = iteration
+        self._checkpoint_count += 1
 
     def send_progress(self, progress_info: str = ''):
         """
@@ -104,6 +114,10 @@ class WorkerHealth:
             'current_task': self._current_task or 'idle',
             'progress': progress or '',
             'timestamp': time_module.time(),
+            # Checkpoint tracking
+            'checkpoint_count': self._checkpoint_count,
+            'last_checkpoint_iteration': self._last_checkpoint_iteration,
+            'last_checkpoint_age': time_module.time() - self._last_checkpoint_time if self._last_checkpoint_time > 0 else -1,
         }
 
         # Add resource usage if psutil is available

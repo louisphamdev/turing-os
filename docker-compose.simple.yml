@@ -148,21 +148,46 @@ services:
       - taiga-back
       - taiga-events
 
-  # === Docs - Specification Storage (Wiki.js) ===
-  wiki:
-    image: requarks/wiki:latest
-    container_name: turing_wiki
-    ports:
-      - "6875:3000"
-    volumes:
-      - ./wiki_data:/data
+  # === Docs - Specification Storage (BookStack) ===
+  bookstack-db:
+    image: linuxserver/mariadb:latest
+    container_name: turing_bookstack_db
     environment:
-      - DB_TYPE=sqlite
-      - APP_URL=http://localhost:6875
+      - PUID=1000
+      - PGID=1000
+      - MYSQL_ROOT_PASSWORD=bookstack_root_pass
+      - MYSQL_DATABASE=bookstack
+      - MYSQL_USER=bookstack
+      - MYSQL_PASSWORD=bookstack_pass
+    volumes:
+      - ./bookstack_data/mysql:/config
     networks:
       - turing_network
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+    restart: unless-stopped
+
+  bookstack:
+    image: linuxserver/bookstack:latest
+    container_name: turing_bookstack
+    ports:
+      - "6875:80"
+    volumes:
+      - ./bookstack_data/www:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - APP_URL=http://localhost:6875
+      - APP_KEY=some_random_key_change_in_production
+      - DB_HOST=bookstack-db
+      - DB_PORT=3306
+      - DB_USER=bookstack
+      - DB_PASS=bookstack_pass
+      - DB_NAME=bookstack
+      - DB_TYPE=mysql
+    networks:
+      - turing_network
+    depends_on:
+      - bookstack-db
+    restart: unless-stopped
       interval: 10s
       timeout: 5s
       retries: 5
@@ -218,7 +243,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TAIGA_API_URL=http://taiga-gateway:9000/api/v1
-      - WIKI_URL=http://wiki:3000
+      - BOOKSTACK_URL=http://bookstack:80
       - SYNAPSE_API_URL=http://synapse:8008
     depends_on:
       - taiga-gateway
@@ -237,4 +262,4 @@ volumes:
   taiga_media_data:
   taiga_events_rabbitmq_data:
   taiga_async_rabbitmq_data:
-  wiki_data:
+  bookstack_data:

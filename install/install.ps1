@@ -1,4 +1,4 @@
-﻿# Turing OS Installer for Windows (PowerShell)
+# Turing OS Installer for Windows (PowerShell)
 # Usage: Set-ExecutionPolicy Bypass -Scope Process -Force; .\install\install.ps1
 
 param(
@@ -181,21 +181,21 @@ function Auto-Detect-Matrix {
 }
 
 function Auto-Detect-Wiki {
-    Step "Detecting Wiki.js..."
-    $wikiUrl = "http://localhost:$script:WIKI_PORT"
+    Step "Detecting BookStack..."
+    $bookstackUrl = "http://localhost:$script:BOOKSTACK_PORT"
 
-    if (-not (Test-Service $wikiUrl)) {
-        Warn "Wiki.js not responding at $wikiUrl"
+    if (-not (Test-Service $bookstackUrl)) {
+        Warn "BookStack not responding at $bookstackUrl"
         return $null
     }
 
-    Log "Wiki.js detected!"
-    Write-Host "  Wiki.js uses JWT token for API access."
+    Log "BookStack detected!"
+    Write-Host "  BookStack uses JWT token for API access."
     Write-Host "  Create admin account at first login, then generate token at:"
-    Write-Host "    $wikiUrl/settings/api -> New Token"
+    Write-Host "    $bookstackUrl/settings/api -> New Token"
 
     return @{
-        Url            = $wikiUrl
+        Url            = $bookstackUrl
         Token          = $null
         ManualRequired = $true
     }
@@ -243,17 +243,17 @@ function Check-Prerequisites {
     }
 }
 
-# Configure Wiki.js (uses admin credentials from Configure-Admin)
-function Configure-Wiki {
-    SectionHeader "WIKI.JS CONFIGURATION"
+# Configure BookStack (uses admin credentials from Configure-Admin)
+function Configure-BookStack {
+    SectionHeader "BOOKSTACK CONFIGURATION"
 
-    # Wiki.js admin email is derived from admin username
-    $script:WIKI_ADMIN_EMAIL = "admin@wiki.local"
+    # BookStack admin email is derived from admin username
+    $script:BOOKSTACK_ADMIN_EMAIL = "admin@bookstack.local"
     if (-not [string]::IsNullOrEmpty($script:ADMIN_USER)) {
-        $script:WIKI_ADMIN_EMAIL = "$($script:ADMIN_USER)@wiki.local"
+        $script:BOOKSTACK_ADMIN_EMAIL = "$($script:ADMIN_USER)@bookstack.local"
     }
 
-    Log "Wiki.js will use admin credentials from CONFIGURE ADMIN step"
+    Log "BookStack will use admin credentials from CONFIGURE ADMIN step"
 }
 
 # Configure Ports
@@ -261,7 +261,7 @@ function Configure-Ports {
     SectionHeader "PORT CONFIGURATION"
 
     $script:TAIGA_GATEWAY_PORT = Prompt-Input -Label "Taiga Gateway Port" -Default "9000"
-    $script:WIKI_PORT = Prompt-Input -Label "Wiki.js Port" -Default "6875"
+    $script:BOOKSTACK_PORT = Prompt-Input -Label "BookStack Port" -Default "6875"
     $script:SYNAPSE_PORT = Prompt-Input -Label "Matrix/Synapse Port" -Default "8008"
     $script:ORCHESTRATOR_PORT = Prompt-Input -Label "Orchestrator Port" -Default "3001"
 
@@ -357,11 +357,11 @@ function Configure-GitHub {
     Log "GitHub: https://github.com/$($script:GITHUB_REPO)"
 }
 
-# Configure Admin (used for Wiki.js setup)
+# Configure Admin (used for BookStack setup)
 function Configure-Admin {
     SectionHeader "ADMIN CONFIGURATION"
 
-    Write-Host "  This admin account will be used for Wiki.js initial setup."
+    Write-Host "  This admin account will be used for BookStack initial setup."
     Write-Host ""
     $script:ADMIN_USER = Prompt-Input -Label "Admin Username" -Default "admin"
     $script:ADMIN_PASSWORD = Prompt-Input -Label "Admin Password" -Password -Confirm
@@ -388,7 +388,7 @@ services:
 
   wiki:
     ports:
-      - "$($script:WIKI_PORT):3000"
+      - "$($script:BOOKSTACK_PORT):3000"
 
   synapse:
     container_name: synapse
@@ -484,9 +484,9 @@ MATRIX_BOT_TOKEN=$($script:MATRIX_BOT_TOKEN)
 MATRIX_ADMIN_USER_ID=$($script:MATRIX_ADMIN_USER_ID)
 SYNAPSE_REGISTRATION_SECRET=change-me-in-production
 
-# WIKI CONFIGURATION
-WIKI_URL=$($script:WIKI_URL)
-WIKI_JWT_TOKEN=$($script:WIKI_JWT_TOKEN)
+# BOOKSTACK CONFIGURATION
+BOOKSTACK_URL=$($script:BOOKSTACK_URL)
+BOOKSTACK_TOKEN=$($script:BOOKSTACK_TOKEN)
 
 # CONTEXT7 CONFIGURATION
 CONTEXT7_API_KEY=$($script:CONTEXT7_API_KEY)
@@ -562,7 +562,7 @@ function Verify-Installation {
     Step "Verifying installation..."
     Write-Host ""
 
-    $ports = @($script:TAIGA_GATEWAY_PORT, $script:WIKI_PORT, $script:SYNAPSE_PORT, $script:ORCHESTRATOR_PORT)
+    $ports = @($script:TAIGA_GATEWAY_PORT, $script:BOOKSTACK_PORT, $script:SYNAPSE_PORT, $script:ORCHESTRATOR_PORT)
     $allOk = $true
 
     foreach ($port in $ports) {
@@ -600,7 +600,7 @@ function Print-Summary {
     Write-Host ""
     Write-Host "Access URLs:" -ForegroundColor Yellow
     Write-Host "  Taiga:           http://localhost:$($script:TAIGA_GATEWAY_PORT)"
-    Write-Host "  Wiki.js:         http://localhost:$($script:WIKI_PORT)"
+    Write-Host "  BookStack:      http://localhost:$($script:BOOKSTACK_PORT)"
     Write-Host "  Matrix/Synapse:  http://localhost:$($script:SYNAPSE_PORT)"
     Write-Host "  Element:         http://localhost:8080"
     Write-Host "  Orchestrator:    http://localhost:$($script:ORCHESTRATOR_PORT)"
@@ -641,9 +641,9 @@ function Wait-For-Service {
     return $false
 }
 
-# ─── Initialize Wiki.js and get JWT token ─────────────────────────────────────────
+# ─── Initialize BookStack and get JWT token ─────────────────────────────────────────
 function Initialize-WikiJsAndGetToken {
-    SectionHeader "WIKI.JS INITIALIZATION"
+    SectionHeader "BookStack INITIALIZATION"
 
     $workDir = Get-WorkDir
 
@@ -652,52 +652,52 @@ function Initialize-WikiJsAndGetToken {
 services:
   wiki:
     ports:
-      - "$($script:WIKI_PORT):3000"
+      - "$($script:BOOKSTACK_PORT):3000"
 "@
     $overrideContent | Out-File -FilePath "$workDir\docker-compose.override.yml" -Encoding UTF8
 
-    # Start only Wiki.js container
-    Step "Starting Wiki.js container..."
+    # Start only BookStack container
+    Step "Starting BookStack container..."
     Push-Location $workDir
-    docker compose up -d wiki
+    docker compose up -d bookstack-db bookstack
     Pop-Location
 
-    # Wait for Wiki.js to be ready
-    $wikiUrl = "http://localhost:$($script:WIKI_PORT)"
-    $wikiReady = Wait-For-Service -Name "Wiki.js" -Url $wikiUrl -MaxWaitSec 180
+    # Wait for BookStack to be ready
+    $bookstackUrl = "http://localhost:$($script:BOOKSTACK_PORT)"
+    $wikiReady = Wait-For-Service -Name "BookStack" -Url $bookstackUrl -MaxWaitSec 180
 
     if (-not $wikiReady) {
-        ErrorExit "Wiki.js did not start in time. Cannot proceed."
+        ErrorExit "BookStack did not start in time. Cannot proceed."
     }
 
     # Check if already setup
     $setupNeeded = $false
     try {
-        $check = Invoke-RestMethod -Uri "$wikiUrl/api/session" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
+        $check = Invoke-RestMethod -Uri "$bookstackUrl/api/session" -UseBasicParsing -TimeoutSec 5 -ErrorAction SilentlyContinue
         if ($check.user) {
-            Log "Wiki.js already configured"
+            Log "BookStack already configured"
         }
     } catch {
         $setupNeeded = $true
     }
 
-    # Run Wiki.js setup via API
+    # Run BookStack setup via API
     if ($setupNeeded) {
-        Step "Running Wiki.js first-time setup..."
+        Step "Running BookStack first-time setup..."
         try {
             # Setup admin account via POST /api/setup
             $setupBody = @{
-                email    = $script:WIKI_ADMIN_EMAIL
+                email    = $script:BOOKSTACK_ADMIN_EMAIL
                 password = $script:ADMIN_PASSWORD
             } | ConvertTo-Json
 
-            $setupResponse = Invoke-RestMethod -Uri "$wikiUrl/api/setup" -Method POST `
+            $setupResponse = Invoke-RestMethod -Uri "$bookstackUrl/api/setup" -Method POST `
                 -ContentType "application/json" -Body $setupBody -UseBasicParsing -TimeoutSec 30
 
-            Log "Wiki.js admin account created"
+            Log "BookStack admin account created"
         } catch {
-            Warn "Wiki.js setup failed: $_"
-            Write-Host "  Please complete setup manually at $wikiUrl"
+            Warn "BookStack setup failed: $_"
+            Write-Host "  Please complete setup manually at $bookstackUrl"
         }
     }
 
@@ -707,19 +707,19 @@ services:
 
     try {
         $loginBody = @{
-            email    = $script:WIKI_ADMIN_EMAIL
+            email    = $script:BOOKSTACK_ADMIN_EMAIL
             password = $script:ADMIN_PASSWORD
         } | ConvertTo-Json
 
-        $loginResponse = Invoke-RestMethod -Uri "$wikiUrl/api/login" -Method POST `
+        $loginResponse = Invoke-RestMethod -Uri "$bookstackUrl/api/tokens" -Method POST `
             -ContentType "application/json" -Body $loginBody -UseBasicParsing -TimeoutSec 15
 
         if ($loginResponse.token) {
-            $script:WIKI_JWT_TOKEN = $loginResponse.token
-            Log "Wiki.js JWT token obtained automatically!"
+            $script:BOOKSTACK_TOKEN = $loginResponse.token
+            Log "BookStack JWT token obtained automatically!"
             $autoTokenSuccess = $true
         } else {
-            Warn "No token in Wiki.js login response"
+            Warn "No token in BookStack login response"
         }
     } catch {
         # Auto token retrieval failed - will guide user manually below
@@ -729,16 +729,16 @@ services:
     if (-not $autoTokenSuccess) {
         Write-Host ""
         Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" -ForegroundColor Yellow
-        Write-Host "${YELLOW}  WIKI.JS MANUAL TOKEN SETUP (Required)${NC}" -ForegroundColor Yellow
+        Write-Host "${YELLOW}  BookStack MANUAL TOKEN SETUP (Required)${NC}" -ForegroundColor Yellow
         Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}" -ForegroundColor Yellow
         Write-Host ""
         Write-Host "  Automatic token retrieval failed. Please follow these steps:" -ForegroundColor Cyan
         Write-Host ""
-        Write-Host "  ${GREEN}Step 1:${NC} Open Wiki.js in your browser:"
-        Write-Host "         ${CYAN}$wikiUrl${NC}" -ForegroundColor Cyan
+        Write-Host "  ${GREEN}Step 1:${NC} Open BookStack in your browser:"
+        Write-Host "         ${CYAN}$bookstackUrl${NC}" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "  ${GREEN}Step 2:${NC} Login with your admin credentials:"
-        Write-Host "         Email:    ${CYAN}$($script:WIKI_ADMIN_EMAIL)${NC}" -ForegroundColor Cyan
+        Write-Host "         Email:    ${CYAN}$($script:BOOKSTACK_ADMIN_EMAIL)${NC}" -ForegroundColor Cyan
         Write-Host "         Password: ${CYAN}[the password you entered during setup]${NC}"
         Write-Host ""
         Write-Host "  ${GREEN}Step 3:${NC} Go to ${CYAN}Administration${NC} (click your avatar top-right)"
@@ -762,17 +762,17 @@ services:
 
         # Try to open browser
         try {
-            Start-Process "$wikiUrl"
+            Start-Process "$bookstackUrl"
             Write-Host "  Browser opened automatically." -ForegroundColor Green
         } catch {
-            Write-Host "  Please open manually: $wikiUrl" -ForegroundColor Yellow
+            Write-Host "  Please open manually: $bookstackUrl" -ForegroundColor Yellow
         }
 
         Write-Host ""
 
         # Prompt user for token
         while ($true) {
-            Write-Host -NoNewline "  ${CYAN}Enter Wiki.js API Token:${NC} "
+            Write-Host -NoNewline "  ${CYAN}Enter BookStack API Token:${NC} "
             $enteredToken = Read-Host
 
             if ([string]::IsNullOrWhiteSpace($enteredToken)) {
@@ -791,10 +791,10 @@ services:
             try {
                 $headers = @{ "Authorization" = "Bearer $enteredToken" }
                 $body = @{ query = "{ pages { list(limit: 1) { id title } } }" } | ConvertTo-Json
-                $testResp = Invoke-RestMethod -Uri "$wikiUrl/graphql" -Method Post -Headers $headers -Body $body -TimeoutSec 10
+                $testResp = Invoke-RestMethod -Uri "$bookstackUrl/graphql" -Method Post -Headers $headers -Body $body -TimeoutSec 10
 
-                $script:WIKI_JWT_TOKEN = $enteredToken
-                Log "Wiki.js API token validated successfully!"
+                $script:BOOKSTACK_TOKEN = $enteredToken
+                Log "BookStack API token validated successfully!"
                 break
             } catch {
                 Warn "Token validation failed. Please check and try again."
@@ -806,10 +806,10 @@ services:
     $envPath = Join-Path $workDir ".env"
     if (Test-Path $envPath) {
         $envContent = Get-Content $envPath -Raw
-        if ($envContent -match "^[#]?WIKI_JWT_TOKEN=.*$") {
-            $envContent = $envContent -replace "^[#]?WIKI_JWT_TOKEN=.*$", "WIKI_JWT_TOKEN=$($script:WIKI_JWT_TOKEN)"
+        if ($envContent -match "^[#]?BOOKSTACK_TOKEN=.*$") {
+            $envContent = $envContent -replace "^[#]?BOOKSTACK_TOKEN=.*$", "BOOKSTACK_TOKEN=$($script:BOOKSTACK_TOKEN)"
         } else {
-            $envContent += "`nWIKI_JWT_TOKEN=$($script:WIKI_JWT_TOKEN)"
+            $envContent += "`nBOOKSTACK_TOKEN=$($script:BOOKSTACK_TOKEN)"
         }
         $envContent | Set-Content $envPath -NoNewline
         Log "Token saved to .env"
@@ -825,12 +825,12 @@ function Start-InfraAndInitUsers {
     $script:TAIGA_SCHEME = "http"
     $script:TAIGA_DOMAIN = "localhost:$($script:TAIGA_GATEWAY_PORT)"
     $script:SYNAPSE_API_URL = "http://localhost:$($script:SYNAPSE_PORT)"
-    $script:WIKI_URL = "http://localhost:$($script:WIKI_PORT)"
+    $script:BOOKSTACK_URL = "http://localhost:$($script:BOOKSTACK_PORT)"
 
     # Initialize empty tokens
     $script:TAIGA_API_KEY = ""; $script:TAIGA_PROJECT_SLUG = ""
     $script:MATRIX_BOT_TOKEN = ""; $script:MATRIX_ADMIN_USER_ID = ""
-    $script:WIKI_JWT_TOKEN = ""; $script:CONTEXT7_API_KEY = ""
+    $script:BOOKSTACK_TOKEN = ""; $script:CONTEXT7_API_KEY = ""
     $script:LLM_PROVIDER = "openai"; $script:LLM_MODEL = "gpt-4o"
 
     Generate-DockerCompose
@@ -848,7 +848,7 @@ function Start-InfraAndInitUsers {
     $pullSuccess = $false
     $pullRetries = 5
     $pullTimeoutSec = 300  # 5 min timeout per attempt
-    $services = @("taiga-db", "taiga-events-rabbitmq", "taiga-async-rabbitmq", "taiga-back", "taiga-async", "taiga-front", "taiga-events", "taiga-protected", "taiga-gateway", "wiki", "synapse", "element")
+    $services = @("taiga-db", "taiga-events-rabbitmq", "bookstack-db", "taiga-async-rabbitmq", "taiga-back", "taiga-async", "taiga-front", "taiga-events", "taiga-protected", "taiga-gateway", "bookstack", "synapse", "element")
     for ($i = 1; $i -le $pullRetries; $i++) {
         Write-Host "  Pull attempt $i of $pullRetries... (timeout: ${pullTimeoutSec}s)" -ForegroundColor DarkGray
         
@@ -887,13 +887,13 @@ function Start-InfraAndInitUsers {
     }
 
     Write-Host "  Starting containers..." -ForegroundColor DarkGray
-    docker compose up -d taiga-db taiga-events-rabbitmq taiga-async-rabbitmq taiga-back taiga-async taiga-front taiga-events taiga-protected taiga-gateway wiki synapse element
+    docker compose up -d taiga-db taiga-events-rabbitmq taiga-async-rabbitmq taiga-back taiga-async taiga-front taiga-events taiga-protected taiga-gateway bookstack-db bookstack synapse element
     Pop-Location
 
     # Wait for services
     $taigaReady = Wait-For-Service -Name "Taiga" -Url "http://localhost:$($script:TAIGA_GATEWAY_PORT)" -MaxWaitSec 300
     $matrixReady = Wait-For-Service -Name "Matrix" -Url "http://localhost:$($script:SYNAPSE_PORT)" -MaxWaitSec 120
-    $wikiReady = Wait-For-Service -Name "Wiki.js" -Url "http://localhost:$($script:WIKI_PORT)" -MaxWaitSec 180
+    $wikiReady = Wait-For-Service -Name "BookStack" -Url "http://localhost:$($script:BOOKSTACK_PORT)" -MaxWaitSec 180
 
     Write-Host ""
 
@@ -934,7 +934,7 @@ function Load-EnvFromFile {
                     "TAIGA_PROJECT_SLUG" { $script:TAIGA_PROJECT_SLUG = $value }
                     "MATRIX_BOT_TOKEN" { $script:MATRIX_BOT_TOKEN = $value }
                     "MATRIX_ADMIN_USER_ID" { $script:MATRIX_ADMIN_USER_ID = $value }
-                    "WIKI_JWT_TOKEN" { $script:WIKI_JWT_TOKEN = $value }
+                    "BOOKSTACK_TOKEN" { $script:BOOKSTACK_TOKEN = $value }
                     "CONTEXT7_API_KEY" { $script:CONTEXT7_API_KEY = $value }
                     "LLM_PROVIDER" { $script:LLM_PROVIDER = $value }
                     "LLM_API_KEY" { $script:LLM_API_KEY = $value }
@@ -993,7 +993,7 @@ function Main {
     New-Item -ItemType Directory -Path "$INSTALL_DIR\turing-os" -Force | Out-Null
     Clone-Source
 
-    # 2. Configure admin (single credentials for ALL services: Taiga, Matrix, Wiki.js)
+    # 2. Configure admin (single credentials for ALL services: Taiga, Matrix, BookStack)
     SectionHeader "CONFIGURE ADMIN"
     Configure-Admin
 

@@ -17,6 +17,10 @@ export interface ActiveWorker {
   lastBlockedReason?: string;
   consumerToken?: string;
   tokenId?: string;
+  // Checkpoint tracking
+  lastCheckpointTime?: number;
+  lastCheckpointIteration?: number;
+  checkpointCount?: number;
 }
 
 export class DockerService {
@@ -465,6 +469,35 @@ export class DockerService {
     return this.docker.listContainers({
       filters: { label: ['turing-worker=true'] },
     });
+  }
+
+  /**
+   * List ALL containers (worker + infrastructure) — used by Doctor
+   * to discover all containers for log inspection and diagnostics.
+   */
+  async listAllContainers(): Promise<Docker.ContainerInfo[]> {
+    return this.docker.listContainers({ all: true });
+  }
+
+  /**
+   * Get container logs (stdout + stderr) for a given container.
+   * Used by HealthMonitor when Doctor diagnoses a failed worker.
+   */
+  async getContainerLogs(containerName: string, tail: number = 100): Promise<string> {
+    try {
+      const container = this.docker.getContainer(containerName);
+      const logsBuffer = await container.logs({
+        stdout: true,
+        stderr: true,
+        tail,
+        timestamps: true,
+      });
+      // container.logs() returns a Buffer in non-stream mode
+      return logsBuffer.toString('utf-8');
+    } catch (error) {
+      console.warn(`[Docker] getContainerLogs failed for ${containerName}: ${error}`);
+      return '';
+    }
   }
 
   /**

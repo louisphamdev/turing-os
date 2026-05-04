@@ -1,39 +1,58 @@
-# PM Failover System
+# PM Failover System (Doctor-Managed)
 
 ## Overview
 
-PM is the single point of failure. To prevent system-wide paralysis when PM goes down, we implement a **PM Failover** mechanism with a standby PM that takes over if the primary fails.
+PM is the single point of failure. To prevent system-wide paralysis when PM goes down, the **Doctor Agent** manages PM failover — Doctor already has health monitoring infrastructure, diagnosis tools, and self-healing scripts. PM death is handled by the same Doctor pipeline as worker death, with PM-specific tools and triage categories.
+
+> **Architecture Change from Original Design:**
+> The original design specified a hot-standby PM process that monitors via Taiga heartbeat and takes over after 60s. The implemented architecture uses **Doctor Agent as the failover manager** — no second PM process needed. This reuses existing infrastructure and adds full diagnose→fix→track→report capabilities.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     PRIMARY PM                          │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  • Task assignments                              │   │
-│  │  • Resource orchestration                       │   │
-│  │  • Worker coordination                           │   │
-│  │  • Heartbeat to Taiga every 30s                   │   │
-│  └─────────────────────────────────────────────────┘   │
-│                         │                               │
-│                    State Sync                           │
-│                    (every 30s)                         │
-│                         │                               │
-└─────────────────────────┼───────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────┐
-│                    STANDBY PM                           │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  • Hot standby, ready to take over              │   │
-│  │  • Reads state from Taiga                        │   │
-│  │  • Monitors primary heartbeat                   │   │
-│  │  • If primary offline > 60s → TAKEOVER           │   │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    HEALTH MONITOR                           │
+│  (health-monitor.ts — 60s check cycle)                      │
+│                                                             │
+│  Worker/PM dies → _handleDead()                             │
+│         │                                                   │
+│         ├── Worker death → _invokeDoctorForWorkerDeath()     │
+│         │                                              [A]  │
+│         └── PM death    → _invokeDoctorForWorkerDeath() ←── NOW wired
+│                               │                             │
+│                               ▼                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │                   DOCTOR AGENT                         │  │
+│  │  PM-specific tools:                                    │  │
+│  │  • check_pm_health()         — orchestrator /health    │  │
+│  │  • check_pm_queue_state()    — /tmp/turing-pm-state.json│ │
+│  │  • check_pm_failover_readiness() — state freshness      │  │
+│  │  Triage: PM_FAILURE (P0)                               │  │
+│  │  Fix scripts: restart_pm.ps1, check_pm_logs.ps1         │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                               │                             │
+│                               ▼                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │                  PM STATE MANAGER                      │  │
+│  │  (pm-state.ts — persists to /tmp/turing-pm-state.json) │  │
+│  │  Auto-saves every 30s. On PM respawn:                  │  │
+│  │  → injectQueueState() restores queue tasks             │  │
+│  └───────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+**Key difference vs. original standby-PM design:**
+
+| Aspect | Original (standby PM) | Implemented (Doctor-managed) |
+|--------|------------------------|------------------------------|
+| Extra PM process | 2 containers | 0 extra containers |
+| State storage | Taiga ticket | Local JSON file |
+| Diagnosis on death | None | Full Doctor pipeline |
+| Fix on death | None | restart_pm.ps1 + check_pm_logs.ps1 |
+| Flapping detection | Not specified | 3 deaths / 60 min → stop |
+| Monitoring | Standby → Taiga | HealthMonitor 60s cycle |
 
 ---
 

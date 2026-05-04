@@ -107,7 +107,7 @@ test_matrix_token() {
     fi
 }
 
-test_wiki_token() {
+test_bookstack_token() {
     local url="$1"
     local token="$2"
 
@@ -179,11 +179,11 @@ show_service_status() {
         echo -e "${YELLOW}⚠ Service not reachable${NC}"
     fi
 
-    # Wiki.js
-    printf "  Wiki.js: "
-    if [[ -z "$WIKI_JWT_TOKEN" ]]; then
+    # BookStack
+    printf "  BookStack: "
+    if [[ -z "$BOOKSTACK_TOKEN" ]]; then
         echo -e "${YELLOW}⚠ Not configured${NC}"
-    elif curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$WIKI_URL" 2>/dev/null | grep -q "200"; then
+    elif curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$BOOKSTACK_URL" 2>/dev/null | grep -q "200"; then
         echo -e "${GREEN}✓ Connected${NC}"
     else
         echo -e "${YELLOW}⚠ Service not reachable${NC}"
@@ -233,24 +233,24 @@ configure_matrix() {
 configure_wiki() {
     echo ""
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "${YELLOW}┃                  WIKI.JS CONFIG                        ┃${NC}"
+    echo -e "${YELLOW}┃                  BookStack CONFIG                        ┃${NC}"
     echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
-    info "Get API token at: $WIKI_URL/admin/settings/api"
+    info "Get API token at: $BOOKSTACK_URL/admin/settings/api"
     echo ""
 
-    url=$(prompt "Wiki.js URL" "$WIKI_URL")
+    url=$(prompt "BookStack URL" "$BOOKSTACK_URL")
     token=$(prompt "API Token (JWT)" "" "password")
 
     if [[ -n "$token" ]]; then
         echo ""
         step "Testing connection..."
-        result=$(test_wiki_token "$url" "$token")
+        result=$(test_bookstack_token "$url" "$token")
         if echo "$result" | grep -q '"success": true'; then
             log "$(echo "$result" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)"
-            save_env "WIKI_URL" "$url"
-            save_env "WIKI_JWT_TOKEN" "$token"
-            log "Wiki.js configuration saved!"
+            save_env "BOOKSTACK_URL" "$url"
+            save_env "BOOKSTACK_TOKEN" "$token"
+            log "BookStack configuration saved!"
         else
             error_exit "$(echo "$result" | grep -o '"message":"[^"]*"' | cut -d'"' -f4)"
         fi
@@ -318,10 +318,10 @@ test_all_connections() {
         echo -e "${YELLOW}⚠ Not configured${NC}"; all_passed=false
     fi
 
-    # Wiki.js
-    printf "  Wiki.js: "
-    if [[ -n "$WIKI_JWT_TOKEN" ]]; then
-        result=$(test_wiki_token "$WIKI_URL" "$WIKI_JWT_TOKEN")
+    # BookStack
+    printf "  BookStack: "
+    if [[ -n "$BOOKSTACK_TOKEN" ]]; then
+        result=$(test_bookstack_token "$BOOKSTACK_URL" "$BOOKSTACK_TOKEN")
         if echo "$result" | grep -q '"success": true'; then
             echo -e "${GREEN}✓ Connected${NC}"
         else
@@ -362,7 +362,7 @@ show_help() {
     echo "  all       - Configure all services (default)"
     echo "  taiga     - View Taiga config info"
     echo "  matrix    - View Matrix config info"
-    echo "  wiki      - Configure Wiki.js only"
+    echo "  wiki      - Configure BookStack only"
     echo "  context7  - Configure Context7 only"
     echo "  github    - GitHub (no token needed)"
     echo "  test      - Test all connections"
@@ -372,7 +372,7 @@ show_help() {
     echo ""
     echo "Examples:"
     echo "  $0                    # Configure all"
-    echo "  $0 wiki             # Configure Wiki.js only"
+    echo "  $0 wiki             # Configure BookStack only"
     echo "  $0 test               # Test connections"
     echo ""
 }
