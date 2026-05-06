@@ -214,7 +214,8 @@ services:
     networks:
       - turing_network
     depends_on:
-      - bookstack-db
+      bookstack-db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80/"]
       interval: 30s
@@ -301,7 +302,7 @@ services:
     depends_on:
       - taiga-gateway
       - synapse
-      - wiki
+      - bookstack
       - redis
     restart: unless-stopped
 
