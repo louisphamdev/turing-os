@@ -230,14 +230,14 @@ function Show-ServiceStatus {
         Write-Host "${YELLOW}⚠ Service not reachable${NC}"
     }
     
-    # Wiki.js
-    $wikiUrl = $env:WIKI_URL
-    $wikiToken = $env:WIKI_JWT_TOKEN
-    Write-Host -NoNewline "  Wiki.js: "
-    if ([string]::IsNullOrEmpty($wikiToken)) {
+    # BookStack
+    $bookstackUrl = if ($env:BOOKSTACK_URL) { $env:BOOKSTACK_URL } else { "http://localhost:6875" }
+    $bookstackToken = $env:BOOKSTACK_TOKEN
+    Write-Host -NoNewline "  BookStack: "
+    if ([string]::IsNullOrEmpty($bookstackToken)) {
         Write-Host "${YELLOW}⚠ Not configured${NC}"
-    } elseif (Test-ServiceUrl $wikiUrl) {
-        $test = Test-WikiToken -Url $wikiUrl -Token $wikiToken
+    } elseif (Test-ServiceUrl $bookstackUrl) {
+        $test = Test-WikiToken -Url $bookstackUrl -Token $bookstackToken
         if ($test.Success) {
             Write-Host "${GREEN}✓ Connected${NC}"
         } else {
@@ -291,17 +291,18 @@ function Configure-Matrix {
     Info "Manual config not recommended - use the bootstrap script instead."
 }
 
-function Configure-Wiki {
+function Configure-BookStack {
     Write-Host ""
     Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-    Write-Host "${YELLOW}┃                  WIKI.JS CONFIG                        ┃${NC}"
+    Write-Host "${YELLOW}┃                  BOOKSTACK CONFIG                       ┃${NC}"
     Write-Host "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     Write-Host ""
     
-    Info "Get API token at: $($env:WIKI_URL)/admin/settings/api"
+    $defaultUrl = if ($env:BOOKSTACK_URL) { $env:BOOKSTACK_URL } else { "http://localhost:6875" }
+    Info "Get API token at: $defaultUrl/settings/api"
     Write-Host ""
     
-    $url = Prompt -Label "Wiki.js URL" -Default $env:WIKI_URL
+    $url = Prompt -Label "BookStack URL" -Default $defaultUrl
     $token = Prompt -Label "API Token (JWT)" -Password
     
     if (-not [string]::IsNullOrEmpty($token)) {
@@ -312,10 +313,10 @@ function Configure-Wiki {
         if ($test.Success) {
             Log $test.Message
             Save-Env -Updates @{
-                "WIKI_URL" = $url
-                "WIKI_JWT_TOKEN" = $token
+                "BOOKSTACK_URL" = $url
+                "BOOKSTACK_TOKEN" = $token
             }
-            Log "Wiki.js configuration saved!"
+            Log "BookStack configuration saved!"
         } else {
             ErrorExit "$($test.Message) - $($test.Error)"
         }
@@ -378,10 +379,11 @@ function Test-AllConnections {
         if ($test.Success) { Write-Host "${GREEN}✓ Bot token valid${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
     } else { Write-Host "${YELLOW}⚠ Not configured${NC}"; $allPassed = $false }
     
-    # Wiki.js
-    Write-Host -NoNewline "  Wiki.js: "
-    if (-not [string]::IsNullOrEmpty($env:WIKI_JWT_TOKEN)) {
-        $test = Test-WikiToken -Url $env:WIKI_URL -Token $env:WIKI_JWT_TOKEN
+    # BookStack
+    Write-Host -NoNewline "  BookStack: "
+    $bookstackUrl = if ($env:BOOKSTACK_URL) { $env:BOOKSTACK_URL } else { "http://localhost:6875" }
+    if (-not [string]::IsNullOrEmpty($env:BOOKSTACK_TOKEN)) {
+        $test = Test-WikiToken -Url $bookstackUrl -Token $env:BOOKSTACK_TOKEN
         if ($test.Success) { Write-Host "${GREEN}✓ $($test.Message)${NC}" } else { Write-Host "${RED}✗ $($test.Message)${NC}"; $allPassed = $false }
     } else { Write-Host "${YELLOW}⚠ Not configured${NC}"; $allPassed = $false }
     
@@ -439,12 +441,16 @@ switch ($Service.ToLower()) {
     "all" {
         Configure-Taiga
         Configure-Matrix
-        Configure-Wiki
+        Configure-BookStack
         Configure-Context7
     }
     "taiga" { Configure-Taiga }
     "matrix" { Configure-Matrix }
-    "wiki" { Configure-Wiki }
+    "wiki" { 
+        Warn "Wiki is now called BookStack. Use: .\config.ps1 -Service bookstack"
+        Configure-BookStack 
+    }
+    "bookstack" { Configure-BookStack }
     "context7" { Configure-Context7 }
     "github" { Info "GitHub uses repo URL, no token needed." }
     "test" { Test-AllConnections }

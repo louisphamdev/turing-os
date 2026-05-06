@@ -187,10 +187,10 @@ services:
     networks:
       - turing_network
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized", "--silent"]
       interval: 30s
       timeout: 10s
-      retries: 3
+      retries: 5
     restart: unless-stopped
 
   bookstack:
