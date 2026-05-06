@@ -59,9 +59,9 @@ export const config = {
     adminUserId: optionalEnv('MATRIX_ADMIN_USER_ID', ''),
   },
 
-  wiki: {
-    url: optionalEnv('WIKI_URL', 'http://wiki:3000'),
-    apiToken: optionalEnv('WIKI_JWT_TOKEN', ''),
+  bookstack: {
+    url: optionalEnv('BOOKSTACK_URL', 'http://bookstack:80'),
+    apiToken: optionalEnv('BOOKSTACK_TOKEN', ''),
   },
 
   context7: {
@@ -117,7 +117,7 @@ export function logConfigSummary(): void {
   console.log(`[Config] LLM API Key: ${llmKeyStatus}`);
   console.log(`[Config] Taiga: ${config.taiga.apiUrl} (key: ${config.taiga.apiKey ? '✓' : '✗'})`);
   console.log(`[Config] Matrix: ${config.matrix.apiUrl} (token: ${config.matrix.botToken ? '✓' : '✗'})`);
-  console.log(`[Config] Wiki: ${config.wiki.url} (token: ${config.wiki.apiToken ? '✓' : '✗'})`);
+  console.log(`[Config] BookStack: ${config.bookstack.url} (token: ${config.bookstack.apiToken ? '✓' : '✗'})`);
   console.log(`[Config] Context7: ${config.context7.apiKey ? '✓ Set' : '✗ Missing'}`);
   console.log(`[Config] Docker: ${config.docker.workerImage} (max: ${config.docker.maxWorkers})`);
   console.log(`[Config] Execution Mode: ${config.worker.executionMode}`);

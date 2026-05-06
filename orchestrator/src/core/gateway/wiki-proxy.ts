@@ -1,7 +1,7 @@
 /**
- * Wiki Proxy - Proxies Wiki.js GraphQL calls
+ * BookStack Proxy - Proxies BookStack API calls
  * 
- * Intercepts Wiki.js API calls, injects the real JWT token from vault,
+ * Intercepts BookStack API calls, injects the real API token from vault,
  * and logs all requests for audit purposes.
  */
 
@@ -9,7 +9,7 @@ import { DecryptedCredential } from '../credential-vault';
 import { AuditLogger } from './audit-logger';
 import { TokenPayload } from '../consumer-token';
 
-export class WikiProxy {
+export class BookStackProxy {
   private vault: any;
   private auditLogger: AuditLogger;
 
@@ -19,16 +19,16 @@ export class WikiProxy {
   }
 
   /**
-   * Get Wiki API URL from config
+   * Get BookStack API URL from config
    */
-  private getWikiConfig(): { apiUrl: string } {
+  private getBookStackConfig(): { apiUrl: string } {
     return {
-      apiUrl: process.env.WIKI_URL || 'http://localhost:3001',
+      apiUrl: process.env.BOOKSTACK_URL || 'http://bookstack:80',
     };
   }
 
   /**
-   * Proxy a Wiki.js GraphQL request
+   * Proxy a BookStack API request
    */
   async proxy(
     tokenPayload: TokenPayload,
@@ -37,18 +37,18 @@ export class WikiProxy {
     body: { query?: string; variables?: any },
     headers: any
   ): Promise<any> {
-    const config = this.getWikiConfig();
+    const config = this.getBookStackConfig();
 
-    // Get the real JWT token from vault
-    let credential = await this.vault.getCredentialByType('wiki');
+    // Get the real API token from vault
+    let credential = await this.vault.getCredentialByType('bookstack');
     
     if (!credential) {
       // Fallback: use environment variable
-      const fallbackToken = process.env.WIKI_JWT_TOKEN;
+      const fallbackToken = process.env.BOOKSTACK_TOKEN;
       if (!fallbackToken) {
-        throw { message: 'No Wiki credential configured', statusCode: 503 };
+        throw { message: 'No BookStack credential configured', statusCode: 503 };
       }
-      credential = { key: fallbackToken, type: 'wiki', provider: 'generic', id: 'env', authHeader: 'Bearer' };
+      credential = { key: fallbackToken, type: 'bookstack', provider: 'generic', id: 'env', authHeader: 'Bearer' };
     }
 
     // Build the target URL

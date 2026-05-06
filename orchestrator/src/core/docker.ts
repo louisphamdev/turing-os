@@ -65,7 +65,7 @@ export class DockerService {
       `ROLE=${role}`,
       `TAIGA_API_URL=${config.taiga.apiUrl}`,
       `TAIGA_PROJECT_SLUG=${config.taiga.projectSlug}`,
-      `WIKI_URL=${config.wiki.url}`,
+      `BOOKSTACK_URL=${config.bookstack.url}`,
       `ORCHESTRATOR_URL=${config.orchestrator.url}`,
       `SYNAPSE_API_URL=${config.matrix.apiUrl}`,
       `MATRIX_ROOM_ID=${roomId || ''}`,
@@ -172,7 +172,7 @@ export class DockerService {
       `LLM_MODEL=${config.llm.model}`,
       `LLM_BASE_URL=${config.llm.baseUrl}`,
       `TAIGA_API_KEY=${config.taiga.apiKey}`,
-      `WIKI_JWT_TOKEN=${config.wiki.apiToken}`,
+      `BOOKSTACK_TOKEN=${config.bookstack.apiToken}`,
       `CONTEXT7_API_KEY=${context7ApiKey || config.context7.apiKey || ''}`,
       `MATRIX_BOT_TOKEN=${config.matrix.botToken}`,
       `GATEWAY_ENABLED=false`,
@@ -231,79 +231,73 @@ export class DockerService {
   }
 
   private async _getSecretFromWiki(secretKey: string): Promise<string | null> {
-    const wikiUrl = config.wiki.url;
-    const wikiToken = config.wiki.apiToken;
+    const bookstackUrl = config.bookstack.url;
+    const bookstackToken = config.bookstack.apiToken;
 
-    if (!wikiToken) {
-      console.warn(`[Docker] Wiki token not configured - ${secretKey} will not be available`);
+    if (!bookstackToken) {
+      console.warn(`[Docker] BookStack token not configured - ${secretKey} will not be available`);
       return null;
     }
 
     try {
-      // Wiki.js GraphQL API - first get list of pages
-      const listResponse = await fetch(`${wikiUrl}/graphql`, {
-        method: 'POST',
+      // BookStack API - first get list of pages
+      const listResponse = await fetch(`${bookstackUrl}/api/pages`, {
+        method: 'GET',
         headers: {
-          Authorization: `Bearer ${wikiToken}`,
+          Authorization: `Bearer ${bookstackToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          query: `{ pages { list(orderBy: TITLE) { id path title } } }`
-        }),
       });
 
       if (!listResponse.ok) {
-        console.warn(`[Docker] Failed to list Wiki pages: HTTP ${listResponse.status}`);
+        console.warn(`[Docker] Failed to list BookStack pages: HTTP ${listResponse.status}`);
         return null;
       }
 
       const listData: any = await listResponse.json();
-      const pages = listData?.data?.pages?.list || [];
+      const pages = listData?.data || [];
 
       // Search for secrets page by title
       const secretsPage = pages.find((p: any) =>
-        p.title?.toLowerCase().includes('secrets') ||
-        p.path?.toLowerCase().includes('secrets')
+        p.name?.toLowerCase().includes('secrets') ||
+        p.slug?.toLowerCase().includes('secrets')
       );
 
       if (!secretsPage) {
-        console.warn(`[Docker] No secrets page found in Wiki`);
+        console.warn(`[Docker] No secrets page found in BookStack`);
         return null;
       }
 
-      // Now fetch the secrets page content using single query
-      const contentResponse = await fetch(`${wikiUrl}/graphql`, {
-        method: 'POST',
+      // Now fetch the secrets page content
+      const contentResponse = await fetch(`${bookstackUrl}/api/pages/${secretsPage.id}`, {
+        method: 'GET',
         headers: {
-          Authorization: `Bearer ${wikiToken}`,
+          Authorization: `Bearer ${bookstackToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          query: `{ pages { single(id: "${secretsPage.id}") { id content } } }`
-        }),
       });
 
       if (!contentResponse.ok) {
-        console.warn(`[Docker] Failed to fetch Wiki page content: HTTP ${contentResponse.status}`);
+        console.warn(`[Docker] Failed to fetch BookStack page content: HTTP ${contentResponse.status}`);
         return null;
       }
 
       const contentData: any = await contentResponse.json();
-      const pageContent = contentData?.data?.pages?.single?.content || '';
+      const pageContent = contentData?.html || contentData?.markdown || '';
 
       // Parse secrets from content (expecting KEY=VALUE format, one per line)
       const secretPattern = new RegExp(`^${secretKey}=(.+)$`, 'im');
       const match = pageContent.match(secretPattern);
 
       if (match?.[1]) {
-        console.log(`[Docker] Retrieved ${secretKey} from Wiki`);
+        console.log(`[Docker] Retrieved ${secretKey} from BookStack`);
         return match[1].trim();
       }
 
-      console.warn(`[Docker] Secret ${secretKey} not found in Wiki secrets page`);
+      console.warn(`[Docker] Secret ${secretKey} not found in BookStack secrets page`);
       return null;
     } catch (error) {
-      console.warn(`[Docker] Error retrieving secret from Wiki: ${error}`);
+      console.warn(`[Docker] Error retrieving secret from BookStack: ${error}`);
       return null;
     }
   }
