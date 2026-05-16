@@ -16,6 +16,7 @@ import { getCredentialVault } from './core/credential-vault';
 import { getConsumerTokenManager } from './core/consumer-token';
 import { getRBACService } from './core/rbac';
 import { PMStateManager } from './core/pm-state';
+import { natsService } from './core/nats';
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────
 console.log('');
@@ -78,6 +79,9 @@ if (autoStartRoles.length > 0) {
 }
 
 healthMonitor.start();
+
+// Best-effort start of NATS dual-publish (no-op when NATS_ENABLED=false).
+natsService.start().catch((err) => console.warn(`[NATS] start failed: ${err}`));
 
 docker.startEventMonitor((containerId, ticketId, action, details) => {
   if (action === 'oom') {

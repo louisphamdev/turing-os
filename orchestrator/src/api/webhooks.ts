@@ -7,6 +7,20 @@ import { getRoleSpec } from '../agents/init';
 import { config } from '../config';
 import { priorityQueue, Priority, QueuedTask } from '../core/priority-queue';
 import { scanTaskDescription } from '../core/security/prompt-filter';
+import { natsService, NatsService } from '../core/nats';
+
+function mirrorToNats(
+  registry: WorkerRegistry,
+  ticketId: string,
+  kind: 'event' | 'heartbeat',
+  payload: Record<string, unknown>,
+): void {
+  if (!natsService.isEnabled()) return;
+  const worker = registry.lookupByTicket(ticketId);
+  const role = worker?.role || 'unknown';
+  const subject = NatsService.workerSubject(role, ticketId, kind);
+  natsService.publish(subject, { ticketId, role, ...payload, ts: Date.now() }).catch(() => undefined);
+}
 
 const TICKET_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,63}$/;
 
@@ -163,6 +177,8 @@ export function webhooksRouter(
 
     console.log(`[Webhook] Blocked: ticket=${ticket_id}, reason=${reason}`);
 
+    mirrorToNats(registry, ticket_id, 'event', { kind: 'blocked', reason: reason || null });
+
     // Update priority queue
     priorityQueue.blockTask(ticket_id);
 
@@ -189,6 +205,8 @@ export function webhooksRouter(
     }
 
     console.log(`[Webhook] Completed: ticket=${ticket_id}, summary=${summary}`);
+
+    mirrorToNats(registry, ticket_id, 'event', { kind: 'completed', summary: summary || null });
 
     // Update priority queue and get next task
     const nextTask = priorityQueue.completeTask(ticket_id);
@@ -378,7 +396,7 @@ export function webhooksRouter(
     }
 
     healthMonitor.onHeartbeat(ticket_id, { status, progress });
-    
+
     // Track checkpoint info in registry for PM visibility
     if (registry.lookupByTicket(ticket_id)) {
       registry.update(ticket_id, {
@@ -387,7 +405,14 @@ export function webhooksRouter(
         checkpointCount: checkpoint_count || 0,
       } as any);
     }
-    
+
+    mirrorToNats(registry, ticket_id, 'heartbeat', {
+      status: status || null,
+      progress: progress ?? null,
+      checkpointCount: checkpoint_count ?? null,
+      lastCheckpointIteration: last_checkpoint_iteration ?? null,
+    });
+
     res.status(200).json({ ack: true, timestamp: Date.now() });
   });
 

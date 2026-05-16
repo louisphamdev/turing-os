@@ -19,6 +19,7 @@
 
 import { config } from '../config';
 import { WorkerCommand } from './intent-parser';
+import { natsService, NatsService } from './nats';
 
 interface MatrixRoom {
   room_id?: string;
@@ -276,13 +277,19 @@ export class MatrixService {
   }
 
   /**
-   * Send a message to a specific worker's Matrix room
+   * Send a message to a specific worker's Matrix room.
+   * Also mirrors to NATS turing.worker.*.<ticket>.inbox when NATS_ENABLED=true
+   * (phase 1 of the Matrix->NATS migration; workers still read from Matrix).
    */
   async sendToWorkerRoom(ticketId: string, message: string): Promise<boolean> {
     const roomId = this.workerToRoom.get(ticketId);
     if (!roomId) {
       console.warn(`[Matrix] No room found for worker ${ticketId}`);
       return false;
+    }
+    if (natsService.isEnabled()) {
+      const subject = NatsService.workerSubject('any', ticketId, 'inbox');
+      natsService.publish(subject, { ticketId, message, ts: Date.now() }).catch(() => undefined);
     }
     return this._sendToRoom(roomId, message);
   }

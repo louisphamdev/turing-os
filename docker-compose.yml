@@ -294,6 +294,9 @@ services:
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
       - ALERT_COOLDOWN_MS=${ALERT_COOLDOWN_MS:-300000}
       - REDIS_URL=${REDIS_URL:-redis://turing_redis:6379}
+      # ─── NATS (Phase 0+1 of Matrix migration; opt-in dual-publish) ─────
+      - NATS_ENABLED=${NATS_ENABLED:-false}
+      - NATS_URL=${NATS_URL:-nats://nats:4222}
     env_file:
       - .env
     networks:
@@ -304,6 +307,7 @@ services:
       - synapse
       - bookstack
       - redis
+      - nats
     restart: unless-stopped
 
   # === State (Fast) - Redis for PM Failover ===
@@ -323,6 +327,29 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # === Message Bus - NATS JetStream (Phase 0+1 of Matrix->NATS migration) ===
+  # Internal-only (no exposed port). Used for worker<->orchestrator bus when
+  # NATS_ENABLED=true. Matrix still handles HITL chat with admins.
+  nats:
+    image: nats:2.10-alpine
+    container_name: turing_nats
+    command:
+      - "-js"
+      - "-sd"
+      - "/data"
+      - "-m"
+      - "8222"
+    volumes:
+      - nats_data:/data
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8222/varz | grep -q server_id || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
 networks:
   turing_network:
     driver: bridge
@@ -337,5 +364,6 @@ volumes:
   taiga_async_rabbitmq_data:
   taiga_events_rabbitmq_data:
   synapse_data:
+  nats_data:
   worker_workspace:
   redis_data:
