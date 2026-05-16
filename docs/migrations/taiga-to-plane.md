@@ -1,8 +1,16 @@
 # Migration Spec: Taiga → Plane
 
-Status: PROPOSAL — not started.
-Author: audit pass, 2026-05-16.
-Estimated effort: 6–10 working days of focused work.
+Status: APPROVED — not yet started.
+Author: audit pass, 2026-05-16. Decisions chốt 2026-05-17.
+Estimated effort: 6–10 working days (includes new inventory step).
+
+## Decisions locked in (2026-05-17)
+
+| Open question | Decision |
+|---|---|
+| Preserve closed-ticket history? | **No.** Only OPEN tickets get migrated. Closed-ticket data is acceptable loss. |
+| Third-party readers of Taiga? | **Unknown — must inventory before cutover.** A new pre-cutover step (see Phase 2.5) enumerates webhooks, dashboards, and CI scripts that hit Taiga directly. |
+| Plane variant | Self-hosted Plane CE (`makeplane/plane`). |
 
 ## 1. Why migrate
 
@@ -143,9 +151,20 @@ queue from scratch after losing the local state file.
 - Run the same unit tests against both backends.
 - Smoke-test workers with `STATE_BACKEND=plane` in a non-prod compose stack.
 
+### Phase 2.5 — External-integration inventory (0.5 day)
+- Audit external systems that read Taiga directly. Required checks:
+  - `git log --all --source -- ':!docs/**'` for `taiga` URL references outside the repo's own tools.
+  - Search for outgoing webhooks configured in the Taiga admin UI
+    (`Settings → Webhooks`).
+  - Ask the team for any Metabase / Grafana / custom dashboards pointed at
+    Taiga's Postgres or REST API.
+  - Search CI configs (`.github/workflows/`, Jenkinsfiles) for Taiga API calls.
+- Output: `docs/migrations/taiga-integrations.md` listing every found
+  consumer and its required Plane equivalent. Blocks Phase 3 until reviewed.
+
 ### Phase 3 — Cutover (1 day)
-- Export open Taiga tickets via `taiga export`, import into Plane via
-  `plane CLI`. Acceptable to lose closed tickets if you only want active work.
+- Export **only OPEN** Taiga tickets via `taiga export`, import into Plane
+  via `plane CLI`. Closed tickets are dropped per locked-in decision.
 - Flip `STATE_BACKEND=plane` in production `.env`.
 - Stop the `taiga-*` services in `docker-compose.yml` but do not delete the
   volume — keep `taiga_db_data` for at least 30 days as rollback insurance.
@@ -176,10 +195,7 @@ is lost. Acceptable if cutover happens during a quiet period.
 Phase 4 is the point of no return — schedule at least a week between
 Phase 3 and Phase 4.
 
-## 11. Open questions for the user
+## 11. Open questions
 
-1. Is preserving closed-ticket history important? If yes, the import script
-   gets significantly more complex.
-2. Are there third-party integrations that read Taiga directly (webhooks,
-   reports, exports) that would also need to be re-pointed?
-3. Plane CE vs Plane Cloud — confirming self-hosted CE is the target.
+All resolved — see "Decisions locked in" at the top of this file. The
+third-party-readers question is handled by the new Phase 2.5 inventory step.

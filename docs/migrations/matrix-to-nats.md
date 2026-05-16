@@ -1,8 +1,16 @@
 # Migration Spec: Matrix/Synapse → NATS
 
-Status: PROPOSAL — not started.
-Author: audit pass, 2026-05-16.
+Status: APPROVED — not yet started.
+Author: audit pass, 2026-05-16. Decisions chốt 2026-05-17.
 Estimated effort: 5–8 working days of focused work.
+
+## Decisions locked in (2026-05-17)
+
+| Open question | Decision |
+|---|---|
+| Keep Element Web for HITL? | **Yes — required.** Synapse + Element stay. Phase 4 only removes the worker-room logic; it never deletes Synapse. |
+| Expose NATS outside Docker network? | **No.** Internal-only on `turing_network`. No mTLS needed for now. |
+| JetStream disk budget | Accept default sizing (~4 GB/month for a 50-worker fleet at 1 msg/s with 72h retention). |
 
 ## 1. Why migrate
 
@@ -107,10 +115,13 @@ max_age=72h), `TURING_AUDIT` (retention=limits, max_age=30d).
 - Matrix rooms continue to mirror NATS for human visibility (one-way relay).
 
 ### Phase 4 — Cleanup (1 day)
-- Delete the worker-room creation logic in `MatrixService`.
-- Delete `base-worker/src/tools/matrix_tools.py` worker helpers.
-- Remove `matrix-proxy.ts` worker permissions (admin-only now).
+- Delete the worker-room creation logic in `MatrixService`. **Keep** the
+  admin-DM and per-room mirror helpers — Element is still the HITL UI.
+- Delete worker-only helpers from `base-worker/src/tools/matrix_tools.py`
+  but keep `send_to_admin_room` (HITL bubble-up).
+- Remove worker permissions from `matrix-proxy.ts` — admin-only.
 - Update docs: `worker-communication-protocol.md`, `README.md`, `pm-failover.md`.
+- Do **NOT** remove `synapse:` or `element:` services from compose.
 
 ## 6. Risks and mitigations
 
@@ -128,12 +139,6 @@ Phases 1 and 2 are reversible by flipping `WORKER_TRANSPORT` back to `matrix`.
 Phases 3 and 4 require restoring deleted Matrix code paths from git — do not
 start them until Phase 2 has been observed in production for at least 72h.
 
-## 8. Open questions for the user
+## 8. Open questions
 
-1. Is HITL on Element Web a hard requirement, or are you open to replacing it
-   with a small custom admin web UI later? If yes, a follow-up spec can remove
-   Synapse entirely.
-2. Do you need NATS to be exposed outside the Docker network? If yes, mTLS
-   setup adds ~1 day.
-3. JetStream disk budget: a 50-worker fleet at 1 msg/s averages ~4 GB/month
-   on `TURING_EVENTS` with 72h retention. Acceptable?
+All resolved — see "Decisions locked in" at the top of this file.
