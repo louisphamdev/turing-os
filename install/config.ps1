@@ -1,8 +1,9 @@
 ﻿# Turing OS Configuration Manager
-# Usage: .\config.ps1 [-Service all|taiga|matrix|wiki|context7|github]
+# Usage: .\config.ps1 [-Service all|taiga|matrix|bookstack|context7|github|test]
+# "wiki" is accepted as a deprecated alias for "bookstack".
 
 param(
-    [ValidateSet("all", "taiga", "matrix", "wiki", "context7", "github", "test")]
+    [ValidateSet("all", "taiga", "matrix", "bookstack", "wiki", "context7", "github", "test")]
     [string]$Service = "all"
 )
 

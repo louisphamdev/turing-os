@@ -2,8 +2,13 @@
 name: turing-os-instructions
 description: Project Turing OS agent instructions — multi-agent IT department simulation with Matrix/Synapse communication, Docker-based worker orchestration, and role-based task management.
 applyTo:
-  - "**"
-version: 1.0.0
+  - "orchestrator/**"
+  - "base-worker/**"
+  - "roles/**"
+  - "scripts/**"
+  - "docker-compose*.yml"
+  - "Makefile"
+version: 1.0.1
 ---
 
 # Project Turing OS — Agent Instructions

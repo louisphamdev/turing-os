@@ -485,4 +485,4 @@ Each known issue in BookStack follows this structure:
 | `base-worker/src/tools/doctor_tools.py` | All Doctor tools |
 | `roles/doctor.md` | Doctor role definition |
 | `scripts/doctor-fixes/` | Self-healing fix scripts |
-| `wiki_data/doctor/` | BookStack pages (known-issues, metrics) |
+| `bookstack_data/doctor/` | BookStack pages (known-issues, metrics) |

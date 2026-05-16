@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as fsp from 'fs/promises';
 import { PriorityQueue, QueuedTask } from './priority-queue';
 import { WorkerRegistry } from './registry';
 import { ActiveWorker } from './docker';
@@ -39,15 +40,15 @@ export class PMStateManager {
    */
   startAutoPersist(): void {
     this.persistTimer = setInterval(() => {
-      this.saveState();
+      this.saveState().catch(err => console.warn(`[PMState] auto-persist failed: ${err}`));
     }, 30000);
     console.log('[PMState] Auto-persist started (30s interval)');
   }
 
   /**
-   * Save current PM state to disk
+   * Save current PM state to disk (non-blocking).
    */
-  saveState(): void {
+  async saveState(): Promise<void> {
     try {
       const pmWorker = this._getPMWorker();
       const state: PMState = {
@@ -63,7 +64,7 @@ export class PMStateManager {
       };
 
       const data = JSON.stringify(state, null, 2);
-      fs.writeFileSync(this.persistPath, data, 'utf-8');
+      await fsp.writeFile(this.persistPath, data, 'utf-8');
       console.log(`[PMState] Saved state to ${this.persistPath} (queue: ${state.queueState.queue.length} queued)`);
     } catch (error) {
       console.warn(`[PMState] Failed to save state: ${error}`);
@@ -162,6 +163,6 @@ export class PMStateManager {
       clearInterval(this.persistTimer);
       this.persistTimer = null;
     }
-    this.saveState(); // Final save on shutdown
+    this.saveState().catch(err => console.warn(`[PMState] final save failed: ${err}`));
   }
 }

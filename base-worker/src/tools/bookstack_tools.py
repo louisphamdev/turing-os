@@ -49,7 +49,7 @@ def _make_request(method: str, endpoint: str, data: dict = None, params: dict = 
         print(f"[BookStack] HTTP error {e.response.status_code}: {e.response.text[:200]}")
         try:
             return {'error': e.response.json().get('message', str(e))}
-        except:
+        except (ValueError, AttributeError):
             return {'error': str(e)}
     except Exception as e:
         print(f"[BookStack] API request failed: {e}")

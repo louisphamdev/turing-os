@@ -641,9 +641,14 @@ class OpenAIAgent(HermesAgent):
             return self._call_llm_direct(messages)
 
     def _call_llm_direct(self, messages: list[AgentMessage] = None) -> dict:
-        """Call OpenAI API directly"""
+        """Call OpenAI API directly. Legacy mode — gateway is the supported path."""
         from openai import OpenAI
 
+        if not getattr(self, "_warned_legacy_llm", False):
+            print("[Hermes] WARNING: using legacy direct LLM mode. Set GATEWAY_ENABLED=true to route through the orchestrator gateway.")
+            self._warned_legacy_llm = True
+        if not self.api_key:
+            raise RuntimeError("LLM_API_KEY not set and gateway mode is disabled — worker cannot reach the LLM")
         client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         # Convert messages to OpenAI format
@@ -882,9 +887,14 @@ class AnthropicAgent(HermesAgent):
             return self._call_llm_direct(messages)
 
     def _call_llm_direct(self, messages: list[AgentMessage] = None) -> dict:
-        """Call Anthropic Claude API directly"""
+        """Call Anthropic Claude API directly. Legacy mode — gateway is the supported path."""
         import anthropic
 
+        if not getattr(self, "_warned_legacy_llm", False):
+            print("[Hermes] WARNING: using legacy direct LLM mode. Set GATEWAY_ENABLED=true to route through the orchestrator gateway.")
+            self._warned_legacy_llm = True
+        if not self.api_key:
+            raise RuntimeError("LLM_API_KEY not set and gateway mode is disabled — worker cannot reach the LLM")
         client = anthropic.Anthropic(api_key=self.api_key)
 
         # Extract system message

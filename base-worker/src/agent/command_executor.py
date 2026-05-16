@@ -14,6 +14,7 @@ Executes commands injected by the orchestrator's intent parser:
 """
 
 import json
+import time
 import importlib
 from typing import TYPE_CHECKING
 
@@ -314,7 +315,7 @@ def _handle_inspect(agent: 'HermesAgent', args: dict, sender: str) -> str:
         ])
 
     if query == 'all':
-        lines.append(f"⏱️ Report generated at: {__import__('time').strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Report generated at: {time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     return "\n".join(lines)
 

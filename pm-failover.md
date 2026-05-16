@@ -56,281 +56,113 @@ PM is the single point of failure. To prevent system-wide paralysis when PM goes
 
 ---
 
-## State Synchronization
+## State Persistence
 
-### What Gets Synced
+### What Gets Persisted
 
-```yaml
-SYNC_STATE = {
-    # Task Management
-    "active_tasks": ["TASK-001", "TASK-002"],
-    "task_assignments": {
-        "SE-001": "TASK-001",
-        "QA-001": "TASK-002"
-    },
-    
-    # Worker Status
-    "alive_workers": ["SE-001", "QA-001", "DevOps-001"],
-    "worker_health": {
-        "SE-001": {"status": "working", "last_heartbeat": "..."},
-        "QA-001": {"status": "idle", "last_heartbeat": "..."}
-    },
-    
-    # Queue State
-    "pending_tasks": ["TASK-003", "TASK-004"],
-    "blocked_tasks": ["TASK-005"],
-    
-    # Resource Config
-    "current_mode": "balanced",
-    "scale_decisions": []
-}
-```
-
-### Sync Protocol
-
-```
-PRIMARY PM (every 30 seconds):
-1. Write current state to Taiga ticket "PM-STATE"
-2. Update heartbeat timestamp
-3. Continue normal operations
-
-STANDBY PM (every 30 seconds):
-1. Read "PM-STATE" from Taiga
-2. Check primary heartbeat timestamp
-3. IF heartbeat > 60s old → PRIMARY DEAD → TAKE OVER
-4. IF heartbeat < 60s → OK, continue standby
-```
-
----
-
-## Failover Trigger Conditions
-
-### Automatic Takeover
-
-| Condition | Trigger | Action |
-|-----------|---------|--------|
-| Primary heartbeat missing | > 60 seconds | Standby becomes primary |
-| Primary PM process dead | System detects | Standby promoted |
-| Primary unreachable | > 3 sync cycles | Standby promoted |
-
-### Manual Override
-
-```
-# Admin can force failover
-/failover-to-backup        # Force standby to become primary
-/reset-primary             # Bring primary back as standby
-```
-
----
-
-## Takeover Sequence
-
-```
-WHEN STANDBY DETECTS PRIMARY DEAD (T+60s):
-
-1. STANDBY logs: "Primary PM dead, initiating takeover"
-3. STANDBY updates Taiga: "PM-STATE" with new primary
-3. STANDBY sends broadcast to all workers:
-   "PM failover complete. New PM: [standby_id]"
-4. STANDBY reads full state from Taiga
-5. STANDBY resumes operations:
-   - Check blocked tasks
-   - Resume interrupted tasks
-   - Monitor workers
-6. OLD PRIMARY (if comes back):
-   - Becomes standby
-   - Syncs state from new primary
-```
-
----
-
-## Worker Reconnection
-
-### When PM Changes
-
-```
-Workers are configured with PM endpoint:
-WORKER_CONFIG = {
-    "pm_url": "http://orchestrator:3000",
-    "pm_failover_urls": [
-        "http://orchestrator-primary:3000",
-        "http://orchestrator-backup:3000"
-    ]
-}
-
-On PM change:
-1. Workers receive notification
-2. Workers update PM endpoint
-3. Workers re-subscribe to new PM
-4. Workers confirm connection
-```
-
-### Worker Handling of PM Unavailable
-
-```
-Worker → PM: "Status update" (no response)
-    │
-    ├── Wait 10s, retry
-    ├── Wait 20s, retry
-    ├── Wait 30s, try backup PM
-    │
-    └── If backup responds:
-        "Redirected to backup PM. Continue operations."
-    
-    └── If no PM responds:
-        Worker enters SAFEMODE:
-        - Stop new tasks
-        - Complete current atomic operation
-        - Wait for PM restore
-```
-
----
-
-## Implementation
-
-### Primary PM State Writer
+The `PMStateManager` writes a snapshot to a local JSON file every 30 seconds.
+The file holds enough context for a freshly respawned PM to resume dispatching
+without consulting Taiga first.
 
 ```typescript
-// orchestrator/src/core/pm-state.ts
-
-class PMStateManager {
-  private stateTicketId = "PM-STATE";
-  
-  async writeState(state: SystemState): Promise<void> {
-    const content = {
-      timestamp: Date.now(),
-      pm_id: this.pmId,
-      state: state,
-      heartbeat: Date.now()
-    };
-    
-    await taiga.updateTicket(this.stateTicketId, {
-      comment: JSON.stringify(content)
-    });
-  }
-  
-  async heartbeat(): Promise<void> {
-    // Lightweight heartbeat every 30s
-    await taiga.updateTicket(this.stateTicketId, {
-      comment: `ping:${Date.now()}`
-    });
-  }
+// orchestrator/src/core/pm-state.ts — actual shape persisted to disk
+interface PMState {
+  pmTicketId: string;            // identity of the PM that owned the queue
+  pmContainerId: string;
+  pmStartTime: number;
+  queueState: {
+    queue: QueuedTask[];         // tasks waiting for dispatch
+    runningTask: QueuedTask | null;
+    pausedTasks: [string, QueuedTask][];
+  };
+  timestamp: number;             // wall-clock time of last save
 }
 ```
 
-### Standby PM Monitor
+### Persistence Path
 
-```typescript
-// orchestrator/src/core/standby-pm.ts
+| Setting | Default | How to override |
+|---------|---------|-----------------|
+| State file | `/tmp/turing-pm-state.json` | `PM_STATE_PATH` env var |
+| Save cadence | 30s | hard-coded in `PMStateManager.startAutoPersist` |
+| Stale threshold | 2 minutes since last save | `PMStateManager.isStateStale` |
 
-class StandbyPM {
-  private primaryHeartbeatTimeout = 60000; // 60s
-  private checkInterval = 30000; // 30s
-  
-  async checkPrimaryHealth(): Promise<boolean> {
-    const state = await taiga.getTicket("PM-STATE");
-    const lastHeartbeat = state.comments.last?.timestamp;
-    
-    return (Date.now() - lastHeartbeat) < this.primaryHeartbeatTimeout;
-  }
-  
-  async run(): Promise<void> {
-    while (true) {
-      const isHealthy = await this.checkPrimaryHealth();
-      
-      if (!isHealthy) {
-        console.log("Primary PM dead, taking over...");
-        await this.takeover();
-      }
-      
-      await sleep(this.checkInterval);
-    }
-  }
-  
-  async takeover(): Promise<void> {
-    // 1. Update state to mark self as primary
-    // 2. Send notifications to workers
-    // 3. Resume operations from last known state
-  }
-}
+> Caveat: the file lives on the orchestrator container's filesystem. If the
+> orchestrator itself is recreated, the file is lost and PM has to rebuild
+> queue state from Taiga tickets. Mount a volume on `PM_STATE_PATH` if you
+> need PM-failover survival across orchestrator restarts.
+
+---
+
+## Failover Flow (End to End)
+
+```
+T+0s    Worker (PM container) crashes / OOM / SIGKILLed.
+T+0..60s HealthMonitor's 60s heartbeat check elapses without a beat from PM.
+T+60s   HealthMonitor._handleDead() runs.
+        → detects isPM = (role === 'pm')
+        → calls _invokeDoctorForWorkerDeath('pm', ticketId)
+        → awaits pmStateManager.saveState() so the dying PM's queue is captured.
+T+60..90s Doctor agent triages: category=PM_FAILURE, severity=P0.
+        Doctor runs:
+          - check_pm_health()             — orchestrator /health
+          - check_pm_queue_state()        — reads /tmp/turing-pm-state.json
+          - check_pm_failover_readiness() — confirms state is fresh
+        If a known fix matches, Doctor invokes scripts/doctor-fixes/restart_pm.ps1.
+T+90s+  Orchestrator respawns PM via DockerService.spawnWorker('pm').
+        On boot, PM reads PM_STATE_PATH and re-hydrates its priority queue.
+T+~120s PM resumes dispatching from where the old PM left off.
 ```
 
 ---
 
-## Recovery & Reinstatement
+## Flapping Protection
 
-### Old Primary Recovery
+`HealthMonitor` keeps a rolling window of PM deaths.
+
+| Field | Value |
+|-------|-------|
+| Window length | 60 minutes |
+| Death threshold | 3 |
+| On exceed | Stop respawning, page admin via Matrix |
+
+---
+
+## Admin Commands (Matrix DM to orchestrator)
+
+| Command | Effect |
+|---------|--------|
+| `/pm-status`   | Show current PM container ID + queue depth |
+| `/pm-health`   | Force one health-check cycle and report |
+| `/failover-now`| Kill current PM and let the failover flow respawn it |
+| `/view-pm-state` | Dump the contents of `PM_STATE_PATH` |
+
+---
+
+## Worker Handling of PM Unavailable
+
+Workers do not need PM-failover URLs because there is only one orchestrator
+endpoint. When PM is being respawned, workers see `503` from PM-routed
+endpoints and back off:
 
 ```
-When original primary comes back online:
-
-1. New primary (old standby) continues operations
-2. Old primary starts as standby
-3. State sync: old primary syncs from new primary
-4. If new primary fails → old primary takes over
-
-This prevents flapping (constant switching)
-```
-
-### Flapping Prevention
-
-```
-FLAP_PREVENTION = {
-    "cooldown_period": 300,  // 5 min between failovers
-    "max_failovers_per_hour": 3,
-    "alert_on_failover": true  // Notify admin
-}
+Worker → orchestrator (PM route): 503 PM unavailable
+    │
+    ├── Retry with exponential backoff (1s → 2s → 4s ... max 30s)
+    └── After ~3 minutes without PM:
+        - Stop accepting new tasks
+        - Save checkpoint (see worker-communication-protocol.md)
+        - Wait passively for PM to come back; do NOT escalate to other workers
 ```
 
 ---
 
-## Admin Commands
+## Open Items
 
-```
-/pm-status                # Show primary and standby status
-/failover-now             # Manual failover trigger
-/reset-pm                 # Reset primary to original
-/pm-health                # Check both PMs health
-/view-pm-state            # Current state in Taiga
-```
+- **Cross-orchestrator persistence:** mount a volume on `PM_STATE_PATH` so
+  PM state survives orchestrator container recreation.
+- **State-file integrity:** add a checksum / version field so a corrupted save
+  is detected on load rather than parsed into an unusable queue.
+- **Heartbeat to Taiga:** the current model is local-only; mirroring PM state
+  to a Taiga ticket would let an external observer detect PM death.
 
----
-
-## Monitoring
-
-### Failover Metrics
-
-| Metric | Normal | Alert |
-|--------|--------|-------|
-| PM failover count | 0 | > 0 per day |
-| Time since last heartbeat | < 30s | > 60s |
-| Standby ready | true | false |
-| State sync lag | < 5s | > 30s |
-
-### Alerts
-
-```
-ALERT CONDITIONS:
-- Primary heartbeat missed → Standby activates
-- State sync lag > 30s
-- > 3 failovers in 1 hour
-- Both PMs claiming primary
-```
-
----
-
-## Safemode for Workers
-
-When workers can't reach any PM:
-
-```
-WORKER SAFEMODE:
-1. Stop accepting new tasks
-2. Complete current atomic operation
-3. Save checkpoint to Taiga
-4. Log: "PM unreachable, entering safemode"
-5. Wait for PM to restore
-6. On PM restore: reconnect, resume
-```
-
-This prevents workers from running wild without coordination.

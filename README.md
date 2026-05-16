@@ -145,6 +145,19 @@ Doctor (in container) ── GET /containers ──────────► O
 - **Role-Based Access Control (RBAC)**: Fine-grained permissions per role (e.g., `software-engineer` can write code, `qa` can only read).
 - **Intent Parser**: LLM-powered module that reliably translates natural language admin commands via Matrix into structured actions.
 
+#### Required environment variables
+
+The orchestrator now fails fast if any of these are missing or too short. Generate with `openssl rand -hex 32`.
+
+| Variable | Min length | Purpose |
+|----------|-----------:|---------|
+| `JWT_SECRET` | 32 chars | Signs worker consumer tokens |
+| `VAULT_MASTER_KEY` | 32 chars | AES-256-CBC key for the credential vault |
+| `ADMIN_API_TOKEN` | 16 chars | Bearer token for admin-only gateway endpoints (`/gateway/tokens`, `/gateway/credentials`, …) |
+| `GATEWAY_ENABLED` | — | Gateway is ON by default; set to `false` for legacy direct-key mode |
+
+See `.env.example` for the full list.
+
 ### 6. Orchestration Features Status
 - **PM Failover**: ✅ Doctor-managed via health-monitor → PMStateManager (no standby process needed)
 - **Timeout / Retry / Escalation**: Policy exists in docs, runtime flow is partially shipped.

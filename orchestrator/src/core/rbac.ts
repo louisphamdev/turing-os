@@ -216,7 +216,7 @@ export class RBACService {
   /**
    * Check if a role can access a service
    */
-  canAccessService(role: Role, service: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github'): boolean {
+  canAccessService(role: Role, service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github'): boolean {
     const permissions = this.getPermissionsForRole(role);
     
     const servicePermissions = permissions.filter(p => 
@@ -231,7 +231,7 @@ export class RBACService {
    */
   canPerformAction(
     role: Role, 
-    service: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github',
+    service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github',
     action: 'read' | 'write' | 'admin'
   ): boolean {
     if (action === 'admin') {

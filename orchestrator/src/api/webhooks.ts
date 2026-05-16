@@ -8,6 +8,12 @@ import { config } from '../config';
 import { priorityQueue, Priority, QueuedTask } from '../core/priority-queue';
 import { scanTaskDescription } from '../core/security/prompt-filter';
 
+const TICKET_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,63}$/;
+
+function isValidTicketId(value: unknown): value is string {
+  return typeof value === 'string' && TICKET_ID_PATTERN.test(value);
+}
+
 export function webhooksRouter(
   registry: WorkerRegistry,
   docker: DockerService,
@@ -21,6 +27,9 @@ export function webhooksRouter(
 
     if (!ticket_id) {
       return res.status(400).json({ error: 'ticket_id is required' });
+    }
+    if (!isValidTicketId(ticket_id)) {
+      return res.status(400).json({ error: 'ticket_id must be 1–64 chars of [a-zA-Z0-9_.-]' });
     }
 
     const { status, role, priority } = req.body;
@@ -148,6 +157,9 @@ export function webhooksRouter(
     if (!ticket_id) {
       return res.status(400).json({ error: 'ticket_id is required' });
     }
+    if (!isValidTicketId(ticket_id)) {
+      return res.status(400).json({ error: 'ticket_id format invalid' });
+    }
 
     console.log(`[Webhook] Blocked: ticket=${ticket_id}, reason=${reason}`);
 
@@ -171,6 +183,9 @@ export function webhooksRouter(
 
     if (!ticket_id) {
       return res.status(400).json({ error: 'ticket_id is required' });
+    }
+    if (!isValidTicketId(ticket_id)) {
+      return res.status(400).json({ error: 'ticket_id format invalid' });
     }
 
     console.log(`[Webhook] Completed: ticket=${ticket_id}, summary=${summary}`);
@@ -198,6 +213,9 @@ export function webhooksRouter(
 
     if (!ticket_id || !message) {
       return res.status(400).json({ error: 'ticket_id and message are required' });
+    }
+    if (!isValidTicketId(ticket_id)) {
+      return res.status(400).json({ error: 'ticket_id format invalid' });
     }
 
     console.log(`[Webhook] Worker message: ticket=${ticket_id}, type=${message_type || 'info'}`);
@@ -230,6 +248,9 @@ export function webhooksRouter(
   // Worker calls this to get messages that admin sent in the Matrix room
   router.get('/worker-inbox/:ticketId', (req: Request, res: Response) => {
     const { ticketId } = req.params as { ticketId: string };
+    if (!isValidTicketId(ticketId)) {
+      return res.status(400).json({ error: 'ticketId format invalid' });
+    }
     const since = parseSinceTimestamp(req.query.since);
     const messages = matrixService.drainWorkerInbox(ticketId, since);
 
@@ -250,6 +271,9 @@ export function webhooksRouter(
   // ─── Worker inbox peek (non-destructive) ───────────────────────────────
   router.get('/worker-inbox/:ticketId/peek', (req: Request, res: Response) => {
     const { ticketId } = req.params as { ticketId: string };
+    if (!isValidTicketId(ticketId)) {
+      return res.status(400).json({ error: 'ticketId format invalid' });
+    }
     const since = parseSinceTimestamp(req.query.since);
     const messages = matrixService.peekWorkerInbox(ticketId, since);
 
@@ -349,6 +373,9 @@ export function webhooksRouter(
     if (!ticket_id) {
       return res.status(400).json({ error: 'ticket_id is required' });
     }
+    if (!isValidTicketId(ticket_id)) {
+      return res.status(400).json({ error: 'ticket_id format invalid' });
+    }
 
     healthMonitor.onHeartbeat(ticket_id, { status, progress });
     
@@ -371,6 +398,9 @@ export function webhooksRouter(
     if (!ticket_id) {
       return res.status(400).json({ error: 'ticket_id is required' });
     }
+    if (!isValidTicketId(ticket_id)) {
+      return res.status(400).json({ error: 'ticket_id format invalid' });
+    }
 
     console.log(`[Checkpoint] ${event} for ticket=${ticket_id} (iteration=${iteration}, saves=${save_count})`);
 
@@ -390,6 +420,9 @@ export function webhooksRouter(
   // PM calls this to respawn a crashed worker that resumes from checkpoint
   router.post('/workers/:ticketId/recover', async (req: Request, res: Response) => {
     const ticketId = req.params.ticketId as string;
+    if (!isValidTicketId(ticketId)) {
+      return res.status(400).json({ error: 'ticketId format invalid' });
+    }
     const worker = registry.lookupByTicket(ticketId);
 
     if (!worker) {
@@ -463,6 +496,9 @@ export function webhooksRouter(
   // ─── Health: Get specific worker health ───────────────────────────────
   router.get('/health/worker/:ticketId', async (req: Request, res: Response) => {
     const { ticketId } = req.params as { ticketId: string };
+    if (!isValidTicketId(ticketId)) {
+      return res.status(400).json({ error: 'ticketId format invalid' });
+    }
     const worker = registry.lookupByTicket(ticketId);
     if (!worker) {
       return res.status(404).json({ error: 'Worker not found' });

@@ -35,7 +35,8 @@ interface OrchestratorTool {
   execute: (args: Record<string, any>) => Promise<ToolResult>;
 }
 
-// Guardrail: track pending confirmations
+// Guardrail: track pending confirmations.
+// Bounded to MAX_PENDING_CONFIRMATIONS; expired entries are drained on every access.
 interface PendingConfirmation {
   tool: string;
   args: Record<string, any>;
@@ -43,7 +44,20 @@ interface PendingConfirmation {
   roomId: string;
   expiresAt: number;
 }
-const pendingConfirmations: PendingConfirmation[] = [];
+const MAX_PENDING_CONFIRMATIONS = 100;
+let pendingConfirmations: PendingConfirmation[] = [];
+
+function drainExpiredConfirmations(now: number = Date.now()): void {
+  pendingConfirmations = pendingConfirmations.filter(c => c.expiresAt > now);
+}
+
+function pushConfirmation(entry: PendingConfirmation): void {
+  drainExpiredConfirmations();
+  if (pendingConfirmations.length >= MAX_PENDING_CONFIRMATIONS) {
+    pendingConfirmations.shift();
+  }
+  pendingConfirmations.push(entry);
+}
 
 // ─── Guardrail helpers ──────────────────────────────────────────────────────
 
@@ -78,10 +92,8 @@ export class OrchestratorAgent {
   // ─── Public entry ────────────────────────────────────────────────────────
 
   async think(userMessage: string, sender: string, roomId: string): Promise<string> {
-    // Check for pending confirmation replies
-    const pending = pendingConfirmations.find(
-      (c) => c.sender === sender && c.expiresAt > Date.now()
-    );
+    drainExpiredConfirmations();
+    const pending = pendingConfirmations.find((c) => c.sender === sender);
     if (pending) {
       const confirmed = /^(yes|y|confirm|ok|confirmed|sure|được|rõ|vâng)/i.test(userMessage.trim());
       if (confirmed) {
@@ -266,7 +278,7 @@ export class OrchestratorAgent {
     roomId: string,
     message: string
   ): Promise<string | null> {
-    pendingConfirmations.push({
+    pushConfirmation({
       tool, args, sender, roomId,
       expiresAt: Date.now() + 120_000, // 2 min timeout
     });

@@ -82,11 +82,11 @@ base-worker/tests/
 # Validate compose file syntax
 docker compose -f docker-compose.yml config
 
-# Validate with override
-docker compose -f docker-compose.yml -f docker-compose.override.yml config
+# Validate canonical stack
+docker compose -f docker-compose.yml config
 
-# Validate specific compose file
-docker compose -f docker-compose.turing.yml config
+# Validate canonical stack + dev override
+docker compose -f docker-compose.yml -f docker-compose.override.yml config
 ```
 
 ### Shell Script Linting

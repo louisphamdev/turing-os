@@ -70,11 +70,14 @@ export class ConsumerTokenManager {
   private jwtSecret: string;
 
   constructor(jwtSecret?: string) {
-    this.jwtSecret = jwtSecret || process.env.JWT_SECRET || 'turing-os-consumer-token-secret-dev';
-    
-    if (!process.env.JWT_SECRET) {
-      console.warn('[ConsumerTokenManager] WARNING: JWT_SECRET not set. Using default (DEV ONLY)');
+    const secret = jwtSecret || process.env.JWT_SECRET;
+    if (!secret) {
+      throw new Error('[ConsumerTokenManager] JWT_SECRET is required. Set the JWT_SECRET environment variable.');
     }
+    if (secret.length < 32) {
+      throw new Error('[ConsumerTokenManager] JWT_SECRET must be at least 32 characters.');
+    }
+    this.jwtSecret = secret;
   }
 
   /**
@@ -323,7 +326,7 @@ export class ConsumerTokenManager {
   /**
    * Verify token has access to specific service
    */
-  hasServiceAccess(payload: TokenPayload, service: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github'): boolean {
+  hasServiceAccess(payload: TokenPayload, service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github'): boolean {
     const servicePerms = payload.perms.filter(p => p.startsWith(service) || p === '*');
     return servicePerms.length > 0;
   }

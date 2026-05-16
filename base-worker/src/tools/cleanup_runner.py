@@ -121,7 +121,7 @@ class ContainerCleanup:
                 return path.stat().st_size
             elif path.is_dir():
                 return sum(f.stat().st_size for f in path.rglob('*') if f.is_file())
-        except:
+        except OSError:
             pass
         return 0
     

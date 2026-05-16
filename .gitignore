@@ -42,6 +42,10 @@ temp/
 *.key
 secrets/
 credentials/
+cookies.txt
+login_response.json
+response.json
+taiga.env
 
 # Build artifacts
 *.tar

@@ -15,7 +15,7 @@ export interface AuditEntry {
   workerId: string;
   role: Role;
   tokenId: string;
-  service: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github';
+  service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github';
   method: string;
   requestHeaders: Record<string, string>;
   requestBody?: any;
@@ -47,7 +47,7 @@ export interface ServiceEntry {
   workerId: string;
   role: Role;
   tokenId: string;
-  service: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github';
+  service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github';
   method: string;
   requestBody?: any;
   responseStatus?: number;
@@ -57,10 +57,10 @@ export interface ServiceEntry {
 }
 
 const SENSITIVE_FIELDS = [
-  'api_key', 'apiKey', 'api_key', 'apikey',
+  'api_key', 'apikey', 'apiKey',
   'token', 'access_token', 'refresh_token',
   'password', 'secret', 'authorization',
-  'llm_api_key', 'taiga_api_key', 'wiki_jwt_token',
+  'llm_api_key', 'taiga_api_key', 'bookstack_token',
   'matrix_bot_token', 'github_token',
   'bearer', 'key',
 ];

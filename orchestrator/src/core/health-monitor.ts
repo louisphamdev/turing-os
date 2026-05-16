@@ -286,7 +286,7 @@ export class HealthMonitor {
         );
       } else if (isPM && this.pmStateManager) {
         console.log(`[HealthMonitor] PM death detected — saving queue state before respawn`);
-        this.pmStateManager.saveState();
+        await this.pmStateManager.saveState();
         await matrixService.sendDM(config.matrix.adminUserId || '',
           `🔄 **PM Failover**\nPM worker \`${ticketId}\` died (3+ missed heartbeats).\n` +
           `Doctor: ${doctorResult.diagnosis || 'no diagnosis'}.\n` +

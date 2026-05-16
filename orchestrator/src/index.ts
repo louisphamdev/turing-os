@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import express from 'express';
 import { webhooksRouter } from './api/webhooks';
 import { DockerService } from './core/docker';
@@ -205,6 +206,35 @@ app.use((req, _res, next) => {
   next();
 });
 
+const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || '';
+if (!ADMIN_API_TOKEN) {
+  console.warn('[Orchestrator] ADMIN_API_TOKEN is not set. Admin-only endpoints will refuse every request.');
+}
+
+function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (!ADMIN_API_TOKEN) {
+    res.status(503).json({ error: 'ADMIN_API_TOKEN not configured on this orchestrator' });
+    return;
+  }
+  const header = req.get('authorization') || '';
+  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!provided || provided.length !== ADMIN_API_TOKEN.length) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  try {
+    const ok = crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_API_TOKEN));
+    if (!ok) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+  } catch {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  next();
+}
+
 app.get('/health', async (_req, res) => {
   const workers = registry.listActive();
   const routing = matrixService.getRoutingStatus();
@@ -250,8 +280,7 @@ if (process.env.GATEWAY_ENABLED !== 'false') {
   app.all('/gateway/taiga/*', async (req, res) => {
     await proxyHandler.handleRequest(req, res);
   });
-  app.all('/gateway/wiki/*', async (req, res) => {
-    req.url = req.url.replace('/gateway/wiki', '/gateway/wiki');
+  app.all('/gateway/bookstack/*', async (req, res) => {
     await proxyHandler.handleRequest(req, res);
   });
   app.all('/gateway/matrix/*', async (req, res) => {
@@ -269,24 +298,25 @@ if (process.env.GATEWAY_ENABLED !== 'false') {
       roles: rbac.getAllRoles(),
     });
   });
-  app.get('/gateway/tokens', (_req, res) => {
+  app.get('/gateway/tokens', requireAdmin, (_req, res) => {
     res.json(getConsumerTokenManager().listTokens());
   });
-  app.post('/gateway/tokens/revoke/:tokenId', (req, res) => {
-    const revoked = getConsumerTokenManager().revokeToken(req.params.tokenId);
-    res.json({ revoked, tokenId: req.params.tokenId });
+  app.post('/gateway/tokens/revoke/:tokenId', requireAdmin, (req, res) => {
+    const tokenId = String(req.params.tokenId);
+    const revoked = getConsumerTokenManager().revokeToken(tokenId);
+    res.json({ revoked, tokenId });
   });
-  app.get('/gateway/credentials', (_req, res) => {
+  app.get('/gateway/credentials', requireAdmin, (_req, res) => {
     res.json(getCredentialVault().listCredentials());
   });
-  app.post('/gateway/credentials/import', async (_req, res) => {
+  app.post('/gateway/credentials/import', requireAdmin, async (_req, res) => {
     const count = await getCredentialVault().importFromEnvironment();
     res.json({ imported: count });
   });
-  app.post('/gateway/credentials/rotate/:id', async (_req, res) => {
+  app.post('/gateway/credentials/rotate/:id', requireAdmin, async (_req, res) => {
     res.status(501).json({ error: 'Auto-rotation not implemented yet' });
   });
-  app.get('/gateway/audit/stats', async (req, res) => {
+  app.get('/gateway/audit/stats', requireAdmin, async (req, res) => {
     const { AuditLogger } = await import('./core/gateway/audit-logger');
     const stats = await AuditLogger.getInstance().getStats();
     res.json(stats);
@@ -420,27 +450,16 @@ app.get('/containers', async (req, res) => {
       containers = containers.filter((x) => x.state === state);
     }
 
-    // Attach recent logs if requested (lightweight — last N lines, errors only)
+    // Attach recent logs if requested (lightweight — last N lines, errors only).
+    // Uses Dockerode container.logs() via DockerService to avoid shell injection.
     if (includeLogs) {
       const n = Math.min(parseInt(String(includeLogs), 10) || 20, 100);
       await Promise.allSettled(
         containers.map(async (c) => {
           try {
-            const logs = await new Promise<string>((resolve, reject) => {
-              const chunks: string[] = [];
-              c.id.length; // reference
-              import('child_process').then(({ exec }) => {
-                exec(
-                  `docker logs --tail ${n} --timestamps ${c.name} 2>&1`,
-                  { timeout: 10000 },
-                  (err, stdout, stderr) => {
-                    if (err && !stdout && !stderr) reject(err);
-                    else resolve((stdout + stderr).slice(-2000));
-                  }
-                );
-              }).catch(reject);
-            });
-            const errorLines = logs
+            const raw = await docker.getContainerLogs(c.id, n);
+            const tail = raw.slice(-2000);
+            const errorLines = tail
               .split('\n')
               .filter((l) => /\b(ERROR|FATAL|WARN|WARNING)\b/i.test(l))
               .slice(-n);
@@ -474,40 +493,38 @@ app.get('/containers', async (req, res) => {
 app.get('/containers/:name/logs', async (req, res) => {
   try {
     const { name } = req.params;
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
+      return res.status(400).json({ error: 'Invalid container name' });
+    }
     const lines = Math.min(parseInt(req.query.lines as string, 10) || 50, 500);
     const errorsOnly = req.query.errorsOnly === 'true';
 
-    const { exec } = await import('child_process');
-    const cmd = `docker logs --tail ${lines} --timestamps ${name} 2>&1`;
+    const raw = await docker.getContainerLogs(name, lines);
+    if (!raw) {
+      return res.status(404).json({ error: 'Container not found or log access failed' });
+    }
+    const allLines = raw.split('\n').filter((l) => l.trim());
 
-    exec(cmd, { timeout: 20000 }, (err, stdout, stderr) => {
-      if (err && !stdout && !stderr) {
-        return res.status(404).json({ error: `Container not found or log access failed: ${err.message}` });
+    let entries = allLines.map((line) => {
+      const m = line.match(/^(\S+\s+\S+?)\s+(\w+)\s+(.*)$/);
+      if (m) {
+        return { timestamp: m[1], level: m[2].toUpperCase(), message: m[3].trim() };
       }
-      const raw = (stdout + stderr);
-      const allLines = raw.split('\n').filter((l) => l.trim());
+      let level = 'INFO';
+      if (/\b(ERROR|FATAL|CRITICAL)\b/i.test(line)) level = 'ERROR';
+      else if (/\b(WARN|WARNING)\b/i.test(line)) level = 'WARN';
+      return { timestamp: '', level, message: line.trim() };
+    });
 
-      let entries = allLines.map((line) => {
-        const m = line.match(/^(\S+\s+\S+?)\s+(\w+)\s+(.*)$/);
-        if (m) {
-          return { timestamp: m[1], level: m[2].toUpperCase(), message: m[3].trim() };
-        }
-        let level = 'INFO';
-        if (/\b(ERROR|FATAL|CRITICAL)\b/i.test(line)) level = 'ERROR';
-        else if (/\b(WARN|WARNING)\b/i.test(line)) level = 'WARN';
-        return { timestamp: '', level, message: line.trim() };
-      });
+    if (errorsOnly) {
+      entries = entries.filter((e) => e.level === 'ERROR' || e.level === 'WARN');
+    }
 
-      if (errorsOnly) {
-        entries = entries.filter((e) => e.level === 'ERROR' || e.level === 'WARN');
-      }
-
-      res.json({
-        container: name,
-        total: entries.length,
-        entries,
-        timestamp: new Date().toISOString(),
-      });
+    res.json({
+      container: name,
+      total: entries.length,
+      entries,
+      timestamp: new Date().toISOString(),
     });
   } catch (error) {
     res.status(500).json({ error: `Failed to get logs: ${error}` });

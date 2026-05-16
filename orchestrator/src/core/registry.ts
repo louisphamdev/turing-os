@@ -169,11 +169,11 @@ export class WorkerRegistry {
     }
   }
 
-  private _saveToDisk(): void {
+  private async _saveToDisk(): Promise<void> {
     try {
       const data = JSON.stringify(Array.from(this.registry.entries()), null, 2);
-      const fs = require('fs');
-      fs.writeFileSync(this.persistPath, data, 'utf-8');
+      const fsp = await import('fs/promises');
+      await fsp.writeFile(this.persistPath, data, 'utf-8');
     } catch {
       // Silently ignore persistence errors (e.g. read-only filesystem)
     }

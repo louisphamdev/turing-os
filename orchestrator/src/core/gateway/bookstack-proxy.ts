@@ -62,12 +62,11 @@ export class BookStackProxy {
       'Authorization': `Bearer ${credential.key}`,
     };
 
-    // Log the request
     this.auditLogger.logServiceRequest({
       workerId: tokenPayload.workerId,
       role: tokenPayload.role,
       tokenId: tokenPayload.jti,
-      service: 'wiki',
+      service: 'bookstack',
       method: `${method} /graphql`,
       requestBody: body,
     });
@@ -79,7 +78,7 @@ export class BookStackProxy {
   }
 
   /**
-   * Make the HTTP request to Wiki.js
+   * Make the HTTP request to BookStack
    */
   private async makeRequest(
     url: string,
@@ -103,7 +102,7 @@ export class BookStackProxy {
       if (!response.ok) {
         const errorBody = await response.text();
         throw {
-          message: `Wiki API error: ${response.status} ${response.statusText}`,
+          message: `BookStack API error: ${response.status} ${response.statusText}`,
           statusCode: response.status,
           details: errorBody,
         };
@@ -114,7 +113,7 @@ export class BookStackProxy {
       clearTimeout(timeout);
       
       if (error.name === 'AbortError') {
-        throw { message: 'Wiki request timeout', statusCode: 504 };
+        throw { message: 'BookStack request timeout', statusCode: 504 };
       }
       
       throw error;

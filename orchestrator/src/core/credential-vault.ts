@@ -11,7 +11,7 @@ import * as path from 'path';
 
 export interface StoredCredential {
   id: string;
-  type: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github';
+  type: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github';
   provider: 'openai' | 'anthropic' | 'minimax' | 'google' | 'ollama' | 'generic';
   encryptedKey: string;
   keyHash: string;          // SHA-256 hash for verification without decryption
@@ -58,16 +58,17 @@ export class CredentialVault {
   private readonly cacheTTL: number;
 
   constructor(config: Partial<VaultConfig> = {}) {
-    // Master encryption key should come from environment variable
-    const encryptionKey = config.encryptionKey || process.env.VAULT_MASTER_KEY || '';
-    
-    if (!encryptionKey || encryptionKey.length < 32) {
-      // Generate a warning but allow fallback for development
-      console.warn('[CredentialVault] WARNING: VAULT_MASTER_KEY not set or too short. Using default (DEV ONLY)');
+    const rawKey = config.encryptionKey || process.env.VAULT_MASTER_KEY;
+    if (!rawKey) {
+      throw new Error('[CredentialVault] VAULT_MASTER_KEY is required. Set the VAULT_MASTER_KEY environment variable.');
     }
-    
+    if (rawKey.length < KEY_LENGTH) {
+      throw new Error(`[CredentialVault] VAULT_MASTER_KEY must be at least ${KEY_LENGTH} characters (got ${rawKey.length}).`);
+    }
+    const normalisedKey = crypto.createHash('sha256').update(rawKey, 'utf8').digest('hex').slice(0, KEY_LENGTH);
+
     this.config = {
-      encryptionKey: encryptionKey.padEnd(KEY_LENGTH, '0').slice(0, KEY_LENGTH),
+      encryptionKey: normalisedKey,
       storagePath: config.storagePath || path.join(process.cwd(), 'vault-data'),
       cacheTTL: config.cacheTTL || 5 * 60 * 1000, // 5 minutes default
     };
@@ -296,7 +297,7 @@ export class CredentialVault {
       { envVar: 'MINIMAX_API_KEY', type: 'llm', provider: 'minimax', label: 'MiniMax' },
       { envVar: 'GOOGLE_API_KEY', type: 'llm', provider: 'google', label: 'Google' },
       { envVar: 'TAIGA_API_KEY', type: 'taiga', provider: 'generic', label: 'Taiga' },
-      { envVar: 'WIKI_JWT_TOKEN', type: 'wiki', provider: 'generic', label: 'Wiki.js' },
+      { envVar: 'BOOKSTACK_TOKEN', type: 'bookstack', provider: 'generic', label: 'BookStack' },
       { envVar: 'MATRIX_BOT_TOKEN', type: 'matrix', provider: 'generic', label: 'Matrix' },
       { envVar: 'GITHUB_TOKEN', type: 'github', provider: 'generic', label: 'GitHub' },
     ];

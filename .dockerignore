@@ -1,0 +1,52 @@
+# Source-control / IDE
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+.claude
+.spec-workflow
+
+# Build artefacts
+**/node_modules
+**/dist
+**/build
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+cookies.txt
+login_response.json
+response.json
+taiga.env
+secrets/
+credentials/
+
+# Logs / temp
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+coverage/
+.nyc_output/
+htmlcov/
+
+# Local volume data (do not bake into images)
+bookstack_data/
+wiki_data/
+synapse/data
+synapse/media

@@ -13,7 +13,7 @@ import { AuditLogger, AuditEntry } from './audit-logger';
 import { RateLimiter } from './rate-limiter';
 import { LLMProxy } from './llm-proxy';
 import { TaigaProxy } from './taiga-proxy';
-import { WikiProxy } from './wiki-proxy';
+import { BookStackProxy } from './bookstack-proxy';
 import { MatrixProxy } from './matrix-proxy';
 
 export interface GatewayConfig {
@@ -31,13 +31,13 @@ export class ProxyHandler {
   
   private llmProxy: LLMProxy;
   private taigaProxy: TaigaProxy;
-  private wikiProxy: WikiProxy;
+  private bookstackProxy: BookStackProxy;
   private matrixProxy: MatrixProxy;
 
   constructor() {
     this.llmProxy = new LLMProxy(this.vault, this.auditLogger);
     this.taigaProxy = new TaigaProxy(this.vault, this.auditLogger);
-    this.wikiProxy = new WikiProxy(this.vault, this.auditLogger);
+    this.bookstackProxy = new BookStackProxy(this.vault, this.auditLogger);
     this.matrixProxy = new MatrixProxy(this.vault, this.auditLogger);
   }
 
@@ -57,7 +57,7 @@ export class ProxyHandler {
       return;
     }
 
-    const service = pathParts[1] as 'llm' | 'taiga' | 'wiki' | 'matrix' | 'health';
+    const service = pathParts[1] as 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'health';
     
     // Health check endpoint
     if (service === 'health') {
@@ -119,8 +119,8 @@ export class ProxyHandler {
         case 'taiga':
           result = await this.taigaProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
           break;
-        case 'wiki':
-          result = await this.wikiProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
+        case 'bookstack':
+          result = await this.bookstackProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
           break;
         case 'matrix':
           result = await this.matrixProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
@@ -174,7 +174,7 @@ export class ProxyHandler {
    * Get credential for a service from vault
    */
   async getCredentialForService(
-    service: 'llm' | 'taiga' | 'wiki' | 'matrix' | 'github'
+    service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github'
   ): Promise<DecryptedCredential | null> {
     // Map service to provider
     const providerMap: Record<string, string | undefined> = {

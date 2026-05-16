@@ -2,23 +2,46 @@
 Local Execution Tool
 Executes shell commands and file operations inside the container sandbox.
 STRICT RULE #1: Zero-State Worker - all execution is ephemeral.
+
+Security model: the container itself is the sandbox (ephemeral, AutoRemove=true,
+no docker.sock, no host filesystem). Shell semantics (pipes, redirects) are
+intentional; defence-in-depth still applies via the BLOCKED_PATTERNS list and
+the workspace-root path check below.
 """
 
-import subprocess
 import os
-from typing import Optional
+import re
+import subprocess
+from pathlib import Path
 
-# Commands that should never be executed
-BLOCKED_COMMANDS = [
-    'rm -rf /',
-    'dd if=',
-    'mkfs',
-    ':(){:|:&};:',
-    'chmod -R 777 /',
-    '> /dev/sda',
+WORKSPACE_ROOT = Path("/workspace").resolve()
+
+# Defence-in-depth: substring/regex match against obviously destructive commands.
+# The container is the real sandbox; this just stops the worst foot-guns early.
+BLOCKED_PATTERNS = [
+    re.compile(r"\brm\s+-[rf]+\s*/(?:\s|$)"),
+    re.compile(r"\brm\s+-[rf]+\s+/\*"),
+    re.compile(r"\bdd\s+if="),
+    re.compile(r"\bmkfs\b"),
+    re.compile(r":\(\)\{:\|:&\};:"),
+    re.compile(r"\bchmod\s+-R\s+777\s+/"),
+    re.compile(r">\s*/dev/sd[a-z]"),
 ]
 
 MAX_OUTPUT_LENGTH = 10000  # characters
+
+
+def _resolve_workspace_path(file_path: str) -> Path:
+    """Resolve a user-supplied path and guarantee it stays inside WORKSPACE_ROOT."""
+    candidate = Path(file_path)
+    if not candidate.is_absolute():
+        candidate = WORKSPACE_ROOT / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(WORKSPACE_ROOT)
+    except ValueError as exc:
+        raise PermissionError(f"Path escapes workspace: {file_path}") from exc
+    return resolved
 
 
 def execute_terminal_command(command: str, working_dir: str = "/workspace") -> str:
@@ -33,11 +56,11 @@ def execute_terminal_command(command: str, working_dir: str = "/workspace") -> s
     """
     print(f"[LocalExec] Executing: {command}")
 
-    # Security: block dangerous commands
+    # Security: block obviously destructive commands. The container itself is the sandbox.
     cmd_lower = command.lower().strip()
-    for blocked in BLOCKED_COMMANDS:
-        if blocked in cmd_lower:
-            return f"Error: Command blocked for safety: {blocked}"
+    for pattern in BLOCKED_PATTERNS:
+        if pattern.search(cmd_lower):
+            return f"Error: Command blocked for safety (matched pattern: {pattern.pattern})"
 
     try:
         result = subprocess.run(
@@ -79,21 +102,22 @@ def read_file(file_path: str) -> str:
     Args:
         file_path: Path to the file (relative to /workspace or absolute)
     """
-    # Resolve relative paths
-    if not os.path.isabs(file_path):
-        file_path = os.path.join('/workspace', file_path)
+    try:
+        resolved = _resolve_workspace_path(file_path)
+    except PermissionError as exc:
+        return f"Error: {exc}"
 
-    print(f"[LocalExec] Reading file: {file_path}")
+    print(f"[LocalExec] Reading file: {resolved}")
 
     try:
-        if not os.path.exists(file_path):
-            return f"Error: File not found: {file_path}"
+        if not resolved.exists():
+            return f"Error: File not found: {resolved}"
 
-        if os.path.getsize(file_path) > 500_000:  # 500KB limit
-            return f"Error: File too large ({os.path.getsize(file_path)} bytes). Max 500KB."
+        size = resolved.stat().st_size
+        if size > 500_000:  # 500KB limit
+            return f"Error: File too large ({size} bytes). Max 500KB."
 
-        with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
-            content = f.read()
+        content = resolved.read_text(encoding='utf-8', errors='replace')
 
         if len(content) > MAX_OUTPUT_LENGTH:
             content = content[:MAX_OUTPUT_LENGTH] + f"\n... [truncated, total: {len(content)} chars]"
@@ -113,18 +137,17 @@ def write_file(file_path: str, content: str) -> str:
         file_path: Path to the file (relative to /workspace or absolute)
         content: Content to write
     """
-    if not os.path.isabs(file_path):
-        file_path = os.path.join('/workspace', file_path)
+    try:
+        resolved = _resolve_workspace_path(file_path)
+    except PermissionError as exc:
+        return f"Error: {exc}"
 
-    print(f"[LocalExec] Writing file: {file_path} ({len(content)} chars)")
+    print(f"[LocalExec] Writing file: {resolved} ({len(content)} chars)")
 
     try:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-        with open(file_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-
-        return f"Successfully wrote {len(content)} chars to {file_path}"
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        resolved.write_text(content, encoding='utf-8')
+        return f"Successfully wrote {len(content)} chars to {resolved}"
 
     except Exception as e:
         return f"Error writing file: {str(e)}"

@@ -48,7 +48,7 @@ const PROVIDER_ROTATION_ENDPOINTS: Record<string, {
   'taiga': {
     requiresNewKey: false,   // May support API-based rotation
   },
-  'wiki': {
+  'bookstack': {
     requiresNewKey: false,
   },
   'matrix': {

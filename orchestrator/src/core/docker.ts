@@ -36,7 +36,8 @@ export class DockerService {
         ? { socketPath: socketPath.replace('unix://', '') }
         : { socketPath }
     );
-    // Check if gateway mode is enabled
+    // Gateway is ON by default (matches the project-wide rule that external calls route through the proxy).
+    // Set GATEWAY_ENABLED=false explicitly to fall back to legacy direct-key mode.
     this.gatewayEnabled = process.env.GATEWAY_ENABLED !== 'false';
   }
 
@@ -137,7 +138,6 @@ export class DockerService {
           'consumer-token-id': tokenId,
           'com.docker.compose.project': 'turing-os',
           'com.docker.compose.service': 'worker',
-          'com.docker.compose.project.working_dir': process.cwd(),
         },
         Healthcheck: {
           Test: ['CMD-SHELL', 'ps aux | grep "[p]ython main.py" || exit 1'],
@@ -201,7 +201,6 @@ export class DockerService {
         'gateway-mode': 'false',
         'com.docker.compose.project': 'turing-os',
         'com.docker.compose.service': 'worker',
-        'com.docker.compose.project.working_dir': process.cwd(),
       },
       Healthcheck: {
         Test: ['CMD-SHELL', 'ps aux | grep "[p]ython main.py" || exit 1'],

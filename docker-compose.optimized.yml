@@ -159,6 +159,3 @@ services:
           cpus: '1.0'
         reservations:
           memory: 512M
-    # Internal cron for cleanup (runs alongside main process)
-    entrypoint: ["/bin/sh", "-c", "cron && python /app/src/index.py"]
-    command: []

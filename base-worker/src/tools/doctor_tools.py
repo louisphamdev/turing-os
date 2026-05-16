@@ -147,7 +147,7 @@ def check_system_health() -> dict:
     # Network connectivity checks — parallel for speed
     services_to_check = {
         'taiga': f'{TAIGA_API_URL}/health',
-        'wiki': f'{BOOKSTACK_URL}/health',
+        'bookstack': f'{BOOKSTACK_URL}/health',
         'orchestrator': f'{ORCHESTRATOR_URL}/health',
         'synapse': f'{SYNAPSE_API_URL}/_matrix/client/versions',
     }
@@ -303,7 +303,7 @@ def check_service_connectivity(service_name: str) -> dict:
 
     service_endpoints = {
         'taiga': f'{TAIGA_API_URL}/health',
-        'wiki': f'{BOOKSTACK_URL}/health',
+        'bookstack': f'{BOOKSTACK_URL}/health',
         'matrix': f'{SYNAPSE_API_URL}/_matrix/client/versions',
         'context7': 'https://api.context7.com/health',
         'github': 'https://api.github.com',
@@ -508,7 +508,7 @@ def list_docker_containers(include_logs: bool = False, log_lines: int = 20) -> d
         ('network', 'network'),
         ('security', 'security'),
         ('taiga', 'taiga'),
-        ('wiki', 'wiki'),
+        ('bookstack', 'bookstack'),
         ('synapse', 'matrix'),
         ('matrix', 'matrix'),
         ('context7', 'context7'),
@@ -2033,8 +2033,8 @@ def _suggest_fixes(error_msg: str, container_name: str = '') -> list[dict]:
         svc = 'unknown'
         if 'taiga' in msg or 'taiga' in container:
             svc = 'Taiga'
-        elif 'wiki' in msg or 'wiki' in container:
-            svc = 'Wiki.js'
+        elif 'bookstack' in msg or 'bookstack' in container:
+            svc = 'BookStack'
         elif 'orchestrator' in msg or 'orchestrator' in container:
             svc = 'Orchestrator'
         elif 'synapse' in msg or 'matrix' in container:
