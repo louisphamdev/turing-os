@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  orchestrator:
+    name: Orchestrator (TS + Jest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: orchestrator/package-lock.json
+
+      - name: Install
+        working-directory: orchestrator
+        run: npm ci
+
+      - name: Type-check
+        working-directory: orchestrator
+        run: npx tsc --noEmit
+
+      - name: Test
+        working-directory: orchestrator
+        run: npm test -- --ci
+
+  base-worker:
+    name: Base Worker (Python + pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: base-worker/requirements.txt
+
+      - name: Install
+        working-directory: base-worker
+        run: pip install -r requirements.txt
+
+      - name: Syntax check
+        working-directory: base-worker
+        run: |
+          python -m py_compile src/index.py
+          python -m py_compile src/tools/state_backend.py
+          python -m py_compile src/tools/nats_client.py
+          python -m py_compile src/tools/pm_monitor.py
+
+      - name: Test
+        working-directory: base-worker
+        run: pytest -v
+
+  compose-validate:
+    name: Docker Compose validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate default stack
+        run: docker compose -f docker-compose.yml config > /dev/null
+
+      - name: Validate Plane profile
+        run: docker compose -f docker-compose.yml --profile plane config > /dev/null
