@@ -65,6 +65,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # docker compose substitutes ${VAR} from a .env at validation time.
+      # CI doesn't have real secrets, so seed a copy of .env.example.
+      - name: Seed .env from .env.example
+        run: cp .env.example .env
+
       - name: Validate default stack
         run: docker compose -f docker-compose.yml config > /dev/null
 
