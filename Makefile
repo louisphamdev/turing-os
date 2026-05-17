@@ -111,7 +111,7 @@ status:
 	@echo ""
 	@echo -e "$(YELLOW)Access URLs:$(NC)"
 	@echo "  Taiga:      http://localhost:9000"
-	@echo "  Wiki.js:    http://localhost:6875"
+	@echo "  BookStack:    http://localhost:6875"
 	@echo "  Matrix:     http://localhost:8008"
 	@echo "  Element:    http://localhost:8080"
 	@echo "  Orchestrator: http://localhost:3001/health"
@@ -170,7 +170,7 @@ quickstart:
 	@echo ""
 	@echo -e "$(YELLOW)4. Watch execution and results:$(NC)"
 	@echo "   - Run: make logs"
-	@echo "   - Review docs in Wiki.js after completion"
+	@echo "   - Review docs in BookStack after completion"
 	@echo ""
 
 ## update - Pull latest changes

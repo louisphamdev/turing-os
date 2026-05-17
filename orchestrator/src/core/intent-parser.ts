@@ -86,19 +86,19 @@ Example: "worker ABC, show me what tools are loaded"
 Example: "worker ABC, inspect wiki_tools"
 
 ### save_tool
-Save a tool definition to Wiki.js for sharing across workers.
+Save a tool definition to BookStack for sharing across workers.
 Args: { tool_name: string, tool_module: string, tool_function: string, description?: string, tags?: string[] }
 Example: "worker ABC, save tool my_custom_tool from module mymodule import my_func"
 Example: "worker ABC, lưu tool mytool vào wiki"
 
 ### load_tools
-Load shared tools from Wiki.js into the worker.
+Load shared tools from BookStack into the worker.
 Args: { tool_names?: string[] } (loads all if not specified)
 Example: "worker ABC, load all shared tools from wiki"
 Example: "worker ABC, tải tools từ wiki"
 
 ### delete_tool
-Delete a shared tool from Wiki.js.
+Delete a shared tool from BookStack.
 Args: { tool_name: string }
 Example: "worker ABC, delete tool old_tool from wiki"
 

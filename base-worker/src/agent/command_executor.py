@@ -322,7 +322,7 @@ def _handle_inspect(agent: 'HermesAgent', args: dict, sender: str) -> str:
 
 def _handle_save_tool(agent: 'HermesAgent', args: dict, sender: str) -> str:
     """
-    Save a tool to Wiki.js for sharing across workers.
+    Save a tool to BookStack for sharing across workers.
     
     Args:
         tool_name: Name for the tool (required)
@@ -373,7 +373,7 @@ def _handle_save_tool(agent: 'HermesAgent', args: dict, sender: str) -> str:
 
 def _handle_load_tools(agent: 'HermesAgent', args: dict, sender: str) -> str:
     """
-    Load shared tools from Wiki.js.
+    Load shared tools from BookStack.
     
     Args:
         tool_names: Optional list of specific tools to load (loads all if not specified)
@@ -392,7 +392,7 @@ def _handle_load_tools(agent: 'HermesAgent', args: dict, sender: str) -> str:
 
 def _handle_delete_tool(agent: 'HermesAgent', args: dict, sender: str) -> str:
     """
-    Delete a tool from Wiki.js.
+    Delete a tool from BookStack.
     
     Args:
         tool_name: Name of the tool to delete (required)

@@ -270,7 +270,7 @@ RECEIVE ERROR REPORT (Taiga ticket)
 - `check_recent_errors(count)` — Aggregate ERROR/WARN across all containers
 
 ### Knowledge Base
-- `query_known_issues_db(pattern)` — Search Wiki.js known issues
+- `query_known_issues_db(pattern)` — Search BookStack known issues
 - `save_to_known_issues(key, symptoms, causes, fix, pattern)` — Record new issue
 
 ### Self-Healing
@@ -283,7 +283,7 @@ RECEIVE ERROR REPORT (Taiga ticket)
 - `invoke_worker_tool(role, tool, args)` — **Call tool from another worker role**
 
 ### Reporting
-- `track_metrics(name, value)` — Record metric to Wiki.js
+- `track_metrics(name, value)` — Record metric to BookStack
 - `get_doctor_dashboard()` — Full dashboard summary
 - `create_github_issue(title, body, labels)` — Structured GitHub issue
 - `report_fix_success(ticket, fix, class)` — Record successful fix
@@ -417,7 +417,7 @@ RECEIVE ERROR REPORT
 ```
 
 ### Reporting
-- `track_metrics(name, value)` — Record metric to Wiki.js
+- `track_metrics(name, value)` — Record metric to BookStack
 - `get_doctor_dashboard()` — Full dashboard summary
 - `create_github_issue(title, body, labels)` — Structured GitHub issue
 - `report_fix_success(ticket, fix, class)` — Record successful fix
@@ -540,7 +540,7 @@ Examples:
 - Taiga API connection fails
 - Matrix DM not sent
 - Context7 API timeout
-- Wiki.js secret not found
+- BookStack secret not found
 
 Doctor Action:
 1. Test the integration endpoint
@@ -780,7 +780,7 @@ KNOWN_ISSUES = {
     "context7_timeout": {
         "symptoms": "Worker hangs during research",
         "causes": ["API rate limit", "network issue", "invalid key"],
-        "fix": "Wait 60s, check API key in Wiki.js"
+        "fix": "Wait 60s, check API key in BookStack"
     }
 }
 ```
@@ -852,7 +852,7 @@ COMMUNICATION:
 ### Email Configuration
 
 ```
-Developer email stored in Wiki.js secrets:
+Developer email stored in BookStack secrets:
 doctor-email-to=dev@company.com
 
 Email sent via configured SMTP or API

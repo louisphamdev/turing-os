@@ -5,7 +5,7 @@ Provides tools for:
 - System health monitoring (CPU, memory, disk, Docker, network)
 - Docker log parsing and error aggregation
 - Service connectivity checks (Taiga, Wiki, Matrix, Context7, GitHub)
-- Known issues database (Wiki.js)
+- Known issues database (BookStack)
 - GitHub issue creation
 - Self-healing fix scripts execution and verification
 - Metrics tracking
@@ -15,8 +15,8 @@ Provides tools for:
 
 Environment variables:
     ORCHESTRATOR_URL    — Orchestrator API URL (default: http://turing-orchestrator:3001)
-    BOOKSTACK_URL            — Wiki.js URL (default: http://wiki:3000)
-    BOOKSTACK_TOKEN      — Wiki.js JWT auth token
+    BOOKSTACK_URL            — BookStack URL (default: http://wiki:3000)
+    BOOKSTACK_TOKEN      — BookStack JWT auth token
     GITHUB_TOKEN        — GitHub API token (fallback; primary token fetched from Wiki /secrets/)
     TAIGA_API_URL       — Taiga API URL (default: http://taiga-gateway:80/api/v1)
     TAIGA_API_KEY       — Taiga API key
@@ -51,7 +51,7 @@ SYNAPSE_API_URL = os.environ.get('SYNAPSE_API_URL', 'http://synapse:8008')
 GITHUB_REPO_OWNER = os.environ.get('GITHUB_REPO_OWNER', 'turing-os')
 GITHUB_REPO_NAME = os.environ.get('GITHUB_REPO_NAME', 'turing-os')
 
-# ─── Token Cache (avoids repeated Wiki.js lookups per execution) ─────────────
+# ─── Token Cache (avoids repeated BookStack lookups per execution) ─────────────
 _GITHUB_TOKEN_CACHE: Optional[str] = None
 _GITHUB_TOKEN_FETCHED_AT: float = 0.0
 _TOKEN_CACHE_TTL: float = 300.0  # 5 minutes
@@ -766,10 +766,10 @@ def find_containers_by_role(role: str) -> dict:
     }
 
 
-# ─── 5 & 6. Wiki.js Known Issues DB ─────────────────────────────────────────
+# ─── 5 & 6. BookStack Known Issues DB ─────────────────────────────────────────
 
 def _wiki_request(query: str, variables: dict = None) -> dict:
-    """Internal helper for Wiki.js GraphQL requests."""
+    """Internal helper for BookStack GraphQL requests."""
     import requests
 
     url = f"{BOOKSTACK_URL}/graphql"
@@ -834,7 +834,7 @@ def _parse_known_issue_page(content: str) -> dict:
 
 def query_known_issues_db(error_pattern: str) -> list:
     """
-    Search the known issues database in Wiki.js at /doctor/known-issues/.
+    Search the known issues database in BookStack at /doctor/known-issues/.
 
     Args:
         error_pattern: Search query string to match against known issue patterns,
@@ -904,7 +904,7 @@ def save_to_known_issues(
     pattern: str,
 ) -> dict:
     """
-    Save a new known issue record to Wiki.js at /doctor/known-issues/.
+    Save a new known issue record to BookStack at /doctor/known-issues/.
 
     Args:
         error_key: Unique identifier for this error class
@@ -1021,7 +1021,7 @@ def create_github_issue(
     """
     Create a GitHub issue via the REST API.
 
-    Token priority: Wiki.js /api/secrets/doctor-github-token → GITHUB_TOKEN env var.
+    Token priority: BookStack /api/secrets/doctor-github-token → GITHUB_TOKEN env var.
 
     Args:
         title: Issue title
@@ -1037,7 +1037,7 @@ def create_github_issue(
     if not token:
         return {
             'success': False,
-            'error': 'GitHub token not available. Set BOOKSTACK_TOKEN and store doctor-github-token in Wiki.js, or set GITHUB_TOKEN env var.',
+            'error': 'GitHub token not available. Set BOOKSTACK_TOKEN and store doctor-github-token in BookStack, or set GITHUB_TOKEN env var.',
         }
 
     url = f'https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues'
@@ -1198,7 +1198,7 @@ def verify_fix(command: str, expected_outcome: str) -> dict:
     }
 
 
-# ─── 10. Track Metrics (Wiki.js) ─────────────────────────────────────────────
+# ─── 10. Track Metrics (BookStack) ─────────────────────────────────────────────
 
 def _parse_metric_entries(content: str) -> list:
     """Parse metric entries from a metric page's markdown table."""
@@ -1241,7 +1241,7 @@ def _get_metric_page(metric_name: str) -> dict:
 
 def track_metrics(metric_name: str, value: float) -> dict:
     """
-    Save a metric value to Wiki.js at /doctor/metrics/.
+    Save a metric value to BookStack at /doctor/metrics/.
 
     Metrics are stored as historical JSON entries in a page named after the metric.
     Up to the last 100 entries are kept.

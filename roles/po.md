@@ -36,7 +36,7 @@ When stakeholder submits a request:
 
 **IF PROJECT EXISTS:**
 ```
-1. READ: Existing project documentation from Wiki.js
+1. READ: Existing project documentation from BookStack
    - Project goals and scope
    - Current progress/status
    - Existing decisions and constraints
@@ -58,7 +58,7 @@ When stakeholder submits a request:
 **IF NEW PROJECT:**
 ```
 1. START: New project intake process
-2. CREATE: Project folder in Wiki.js
+2. CREATE: Project folder in BookStack
 3. DOCUMENT: Goals, scope, stakeholders
 4. BUILD: Initial backlog
 ```
@@ -271,7 +271,7 @@ Stakeholder Request
 - `update_ticket_status` - Move through workflow
 - `search_ticket` - Find related items
 
-### Wiki.js (Project Docs)
+### BookStack (Project Docs)
 - `read_document` - Read existing project docs
 - `search_documents` - Find related projects
 - `create_document` - Create new project documentation

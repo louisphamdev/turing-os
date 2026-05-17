@@ -417,7 +417,7 @@ function Show-Help {
     Write-Host "  all       - Configure all services (default)"
     Write-Host "  taiga     - View Taiga config info"
     Write-Host "  matrix    - View Matrix config info"
-    Write-Host "  wiki      - Configure Wiki.js only"
+    Write-Host "  wiki      - Configure BookStack only"
     Write-Host "  context7  - Configure Context7 only"
     Write-Host "  test      - Test all connections"
     Write-Host ""
@@ -426,7 +426,7 @@ function Show-Help {
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  .\config.ps1                    # Configure all"
-    Write-Host "  .\config.ps1 -Service wiki      # Configure Wiki.js only"
+    Write-Host "  .\config.ps1 -Service wiki      # Configure BookStack only"
     Write-Host "  .\config.ps1 -Service test      # Test connections"
     Write-Host ""
 }

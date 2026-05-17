@@ -127,7 +127,7 @@ When LLM rate limit is hit:
 4. When rate limit resets → auto-resume from checkpoint
 
 When budget exhausted:
-1. Save all work to Taiga/Wiki.js
+1. Save all work to Taiga/BookStack
 2. Signal BLOCKED status with "budget_exhausted" tag
 3. Wait for credit refills
 4. Resume automatically when funded

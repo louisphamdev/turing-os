@@ -103,7 +103,7 @@ P0 Interrupt Flow (Parallel Mode):
 **Project execution mode is configured per-project:**
 
 ```yaml
-# In project config (Wiki.js)
+# In project config (BookStack)
 execution:
   mode: sequential  # or parallel
   allow_interrupt: true
@@ -272,7 +272,7 @@ When task is marked DONE:
    - Highlight what to avoid
    - Update best practices
    
-5. STORE: Save to Wiki.js for future reference
+5. STORE: Save to BookStack for future reference
 ```
 
 ### Retro Report Template
@@ -337,7 +337,7 @@ After completing Retro Report:
    - Specific warnings about pitfalls
    - Updated best practices
 3. WORKERS must acknowledge and update their memory
-4. STORE in Wiki.js under /retro/[year]/[quarter]
+4. STORE in BookStack under /retro/[year]/[quarter]
 ```
 
 ### 7. Timeout & Escalation Management
@@ -556,7 +556,7 @@ RETRO REPORT (MANDATORY):
 After EVERY task completion:
 1. Create Retro Report with lessons learned
 2. Send findings to ALL workers
-3. Store in Wiki.js for future reference
+3. Store in BookStack for future reference
 4. Workers must acknowledge and update their memory
 
 HANDOFF FROM PO CHECKLIST:
@@ -640,7 +640,7 @@ When LLM rate limit is hit:
 4. When rate limit resets → auto-resume from checkpoint
 
 When budget exhausted:
-1. Save all work to Taiga/Wiki.js
+1. Save all work to Taiga/BookStack
 2. Signal BLOCKED status with "budget_exhausted" tag
 3. Wait for credit refills
 4. Resume automatically when funded

@@ -130,7 +130,7 @@ When PM requests new engineer:
      - ADAPT to current task requirements
      - NO research needed → skip to creation
    - If NOT FOUND:
-     - RESEARCH: Web search + Wiki.js docs
+     - RESEARCH: Web search + BookStack docs
      - WRITE new JD based on research
      - STORE in JD_CACHE for future
 3. CREATE: Spawn worker with finalized JD
@@ -152,7 +152,7 @@ When research needed:
 2. RESEARCH with Context7: "research_with_context7" for framework documentation
    - Use resolve_library_id to find correct library
    - Get specific topic docs (authentication, hooks, etc.)
-3. SEARCH Wiki.js for: existing documentation on [technology]
+3. SEARCH BookStack for: existing documentation on [technology]
 4. SYNTHESIZE: Combine research findings
 5. WRITE: Create JD with researched tools and practices
 6. VALIDATE: Ensure JD is consistent with base software-engineer.md
@@ -250,7 +250,7 @@ RESOURCE MANAGEMENT RULES:
 KNOWLEDGE MANAGEMENT RULES:
 1. ALWAYS check JD_CACHE before researching new specialization
 2. If similar JD exists → retrieve, adapt, use (no research needed)
-3. If new tech/framework → research via web_search + Wiki.js
+3. If new tech/framework → research via web_search + BookStack
 4. After task completion → log feedback to JD_CACHE
 5. Continuously optimize JD based on execution feedback
 
