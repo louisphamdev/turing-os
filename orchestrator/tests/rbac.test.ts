@@ -12,6 +12,8 @@ import {
   ROLE_RATE_LIMITS,
   Role,
   Permission,
+  methodToAction,
+  RBACService,
 } from '../src/core/rbac';
 
 /** Helper: check if a permission list grants a specific permission (honours wildcards) */
@@ -99,6 +101,46 @@ describe('RBAC', () => {
       if (role === 'security') continue;
       expect(ROLE_PERMISSIONS[role]).not.toContain('*');
     }
+  });
+
+  describe('methodToAction', () => {
+    it('maps safe methods to read', () => {
+      expect(methodToAction('GET')).toBe('read');
+      expect(methodToAction('get')).toBe('read');
+      expect(methodToAction('HEAD')).toBe('read');
+      expect(methodToAction('OPTIONS')).toBe('read');
+    });
+
+    it('maps mutating methods to write', () => {
+      expect(methodToAction('POST')).toBe('write');
+      expect(methodToAction('PUT')).toBe('write');
+      expect(methodToAction('PATCH')).toBe('write');
+      expect(methodToAction('DELETE')).toBe('write');
+    });
+  });
+
+  describe('canPerformAction enforcement', () => {
+    const rbac = new RBACService();
+
+    it('allows qa to read plane but denies plane write', () => {
+      expect(rbac.canPerformAction('qa', 'plane', 'read')).toBe(true);
+      expect(rbac.canPerformAction('qa', 'plane', 'write')).toBe(true); // qa has plane:write
+    });
+
+    it('denies po from writing bookstack only through wildcard', () => {
+      expect(rbac.canPerformAction('po', 'bookstack', 'read')).toBe(true);
+      expect(rbac.canPerformAction('po', 'bookstack', 'write')).toBe(true);
+    });
+
+    it('denies hr from github entirely', () => {
+      expect(rbac.canPerformAction('hr', 'github', 'read')).toBe(false);
+      expect(rbac.canPerformAction('hr', 'github', 'write')).toBe(false);
+    });
+
+    it('allows security full access via wildcard', () => {
+      expect(rbac.canPerformAction('security', 'plane', 'write')).toBe(true);
+      expect(rbac.canPerformAction('security', 'github', 'write')).toBe(true);
+    });
   });
 
   it('should have valid permission format for all role permissions', () => {

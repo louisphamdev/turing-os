@@ -8,6 +8,7 @@
 
 import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
+import { createClient, RedisClientType } from 'redis';
 
 import { Role, Permission } from './rbac';
 
@@ -63,11 +64,16 @@ interface RateLimitEntry {
 }
 
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute default window
+const REVOKED_SET_KEY = 'turing_os_revoked_tokens';
 
 export class ConsumerTokenManager {
   private tokens: Map<string, ConsumerToken> = new Map();
   private rateLimits: Map<string, RateLimitEntry> = new Map();
   private jwtSecret: string;
+  private redisClient: RedisClientType | null = null;
+  // In-memory mirror so validateToken stays synchronous; Redis is the
+  // source of truth across restarts and feeds this set on startup.
+  private revokedMirror: Set<string> = new Set();
 
   constructor(jwtSecret?: string) {
     const secret = jwtSecret || process.env.JWT_SECRET;
@@ -78,6 +84,24 @@ export class ConsumerTokenManager {
       throw new Error('[ConsumerTokenManager] JWT_SECRET must be at least 32 characters.');
     }
     this.jwtSecret = secret;
+    this._initRedis().catch((err) => {
+      console.warn('[ConsumerTokenManager] Redis init failed, revocations are memory-only:', err?.message || err);
+    });
+  }
+
+  private async _initRedis(): Promise<void> {
+    const url = process.env.REDIS_URL || 'redis://localhost:6379';
+    const client = createClient({ url }) as RedisClientType;
+    client.on('error', () => undefined);
+    await client.connect();
+    this.redisClient = client;
+    const members = await client.sMembers(REVOKED_SET_KEY);
+    for (const tokenId of members) {
+      this.revokedMirror.add(tokenId);
+    }
+    if (members.length > 0) {
+      console.log(`[ConsumerTokenManager] Restored ${members.length} revoked token ids from Redis`);
+    }
   }
 
   /**
@@ -158,16 +182,21 @@ export class ConsumerTokenManager {
     try {
       // Verify JWT signature and expiration
       const payload = jwt.verify(token, this.jwtSecret, { algorithms: ['HS256'] }) as TokenPayload;
-      
+
       // Check if we have the token metadata (for additional validation)
       const tokenId = crypto.createHash('sha256').update(payload.jti).digest('hex').slice(0, 16);
       const stored = this.tokens.get(tokenId);
-      
+
+      // Revocation check — survives orchestrator restarts via Redis mirror.
+      if (this.revokedMirror.has(tokenId)) {
+        return { valid: false, error: 'Token revoked' };
+      }
+
       // Even if JWT is valid, check against our store for revocation
       if (stored && stored.expiresAt < new Date()) {
         return { valid: false, error: 'Token expired' };
       }
-      
+
       return {
         valid: true,
         payload,
@@ -216,11 +245,12 @@ export class ConsumerTokenManager {
   revokeToken(tokenId: string): boolean {
     const deleted = this.tokens.delete(tokenId);
     this.rateLimits.delete(tokenId);
-    
+    this._persistRevocation([tokenId]);
+
     if (deleted) {
       console.log(`[ConsumerTokenManager] Revoked token: ${tokenId}`);
     }
-    
+
     return deleted;
   }
 
@@ -229,17 +259,34 @@ export class ConsumerTokenManager {
    */
   revokeWorkerTokens(workerId: string): number {
     let count = 0;
-    
+    const revokedIds: string[] = [];
+
     for (const [tokenId, token] of this.tokens.entries()) {
       if (token.workerId === workerId) {
         this.tokens.delete(tokenId);
         this.rateLimits.delete(tokenId);
+        revokedIds.push(tokenId);
         count++;
       }
     }
-    
+
+    if (revokedIds.length > 0) {
+      this._persistRevocation(revokedIds);
+    }
+
     console.log(`[ConsumerTokenManager] Revoked ${count} tokens for worker ${workerId}`);
     return count;
+  }
+
+  private _persistRevocation(tokenIds: string[]): void {
+    for (const id of tokenIds) {
+      this.revokedMirror.add(id);
+    }
+    if (this.redisClient) {
+      this.redisClient.sAdd(REVOKED_SET_KEY, tokenIds).catch((err) => {
+        console.warn('[ConsumerTokenManager] Redis sAdd failed:', err?.message || err);
+      });
+    }
   }
 
   /**

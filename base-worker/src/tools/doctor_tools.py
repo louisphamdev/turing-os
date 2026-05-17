@@ -18,7 +18,7 @@ Environment variables:
     BOOKSTACK_URL            — BookStack URL (default: http://wiki:3000)
     BOOKSTACK_TOKEN      — BookStack JWT auth token
     GITHUB_TOKEN        — GitHub API token (fallback; primary token fetched from Wiki /secrets/)
-    PLANE_API_URL       — Plane API URL (default: http://taiga-gateway:80/api/v1)
+    PLANE_API_URL       — Plane API URL (default: http://turing_plane_api:8000/api/v1)
     PLANE_API_TOKEN       — Plane API key
     MATRIX_ROOM_ID      — Matrix room for admin communication
     MATRIX_BOT_TOKEN    — Matrix bot auth token
@@ -43,7 +43,7 @@ ORCHESTRATOR_URL = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrato
 BOOKSTACK_URL = os.environ.get('BOOKSTACK_URL', 'http://wiki:3000')
 BOOKSTACK_TOKEN = os.environ.get('BOOKSTACK_TOKEN', '')
 GITHUB_TOKEN_FALLBACK = os.environ.get('GITHUB_TOKEN', '')
-PLANE_API_URL = os.environ.get('PLANE_API_URL', 'http://taiga-gateway:80/api/v1')
+PLANE_API_URL = os.environ.get('PLANE_API_URL', 'http://turing_plane_api:8000/api/v1')
 PLANE_API_TOKEN = os.environ.get('PLANE_API_TOKEN', '')
 MATRIX_ROOM_ID = os.environ.get('MATRIX_ROOM_ID', '')
 MATRIX_BOT_TOKEN = os.environ.get('MATRIX_BOT_TOKEN', '')
@@ -1420,6 +1420,8 @@ def ask_user_confirmation(question: str) -> dict:
     ticket_id = os.environ.get('TICKET_ID', '')
     question_sent_at_ms = int(time.time() * 1000)
 
+    from orchestrator_auth import orchestrator_headers
+
     # Try orchestrator relay first
     relay_success = False
     try:
@@ -1431,6 +1433,7 @@ def ask_user_confirmation(question: str) -> dict:
                 'message_type': 'question',
                 'timeout_seconds': 600,
             },
+            headers=orchestrator_headers(),
             timeout=10,
         )
         relay_success = resp.status_code == 200
@@ -1450,6 +1453,7 @@ def ask_user_confirmation(question: str) -> dict:
             inbox_resp = requests.get(
                 f'{ORCHESTRATOR_URL}/webhooks/worker-inbox/{ticket_id}',
                 params={'since': question_sent_at_ms},
+                headers=orchestrator_headers(),
                 timeout=10,
             )
             if inbox_resp.status_code == 200:
@@ -1617,6 +1621,7 @@ def report_fix_success(
 
     # Notify admin via Matrix
     try:
+        from orchestrator_auth import orchestrator_headers
         requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/worker-message',
             json={
@@ -1629,6 +1634,7 @@ def report_fix_success(
                 ),
                 'message_type': 'info',
             },
+            headers=orchestrator_headers(),
             timeout=10,
         )
     except Exception:
@@ -1743,6 +1749,7 @@ def report_fix_failure(
 
     # Notify admin
     try:
+        from orchestrator_auth import orchestrator_headers
         requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/worker-message',
             json={
@@ -1755,6 +1762,7 @@ def report_fix_failure(
                 ),
                 'message_type': 'error',
             },
+            headers=orchestrator_headers(),
             timeout=10,
         )
     except Exception:
@@ -2528,71 +2536,74 @@ def invoke_worker_tool(
     target_role: str,
     tool_name: str,
     arguments: dict = None,
+    justification: str = '',
 ) -> dict:
     """
-    Invoke a tool from another worker role via the orchestrator relay.
+    Request a capability from another worker role via PM dispatch.
 
-    Doctor uses this when the fix requires capabilities from another role:
-      - devops: scale_worker, restart_service, check_resource_usage
-      - qa: run_tests, check_coverage
-      - se: read_code, analyze_code, suggest_refactor
-      - pm: update_ticket, get_sprint_status
+    Architecture: peer-to-peer worker calls are forbidden by the
+    PO → PM → HR → Workers hierarchy. Instead, we post a structured
+    "cross_worker_request" into the orchestrator's worker-message relay;
+    PM (the only role that reads cross-worker requests) decides whether
+    to dispatch, deny, or escalate.
 
     Args:
-        target_role: The worker role to invoke (devops, qa, se, pm)
-        tool_name: Name of the tool to call on the target worker
-        arguments: Dict of arguments to pass to the tool
+        target_role: which role should provide the capability
+                     (e.g. 'devops', 'qa', 'se', 'data')
+        tool_name:   the tool to call on the target worker
+        arguments:   plain-dict arguments for the tool
+        justification: short reason this cross-call is needed
+
     Returns:
-        dict with success, result, error, from_role, tool_name
+        dict with success=True when the request was queued on PM's inbox.
+        This is a *request*, not a result — PM's response will arrive
+        asynchronously through the normal admin inbox path.
     """
+    import json
     import requests
+    from orchestrator_auth import orchestrator_headers
 
     ticket_id = os.environ.get('TICKET_ID', '')
-    arguments = arguments or {}
+    sender_role = os.environ.get('ROLE', 'unknown')
+
+    payload = {
+        'kind': 'cross_worker_request',
+        'source_role': sender_role,
+        'source_ticket': ticket_id,
+        'target_role': target_role,
+        'tool_name': tool_name,
+        'arguments': arguments or {},
+        'justification': justification or '',
+    }
 
     try:
         resp = requests.post(
-            f'{ORCHESTRATOR_URL}/webhooks/cross-worker-invoke',
+            f'{ORCHESTRATOR_URL}/webhooks/worker-message',
             json={
-                'source_role': 'doctor',
-                'target_role': target_role,
-                'tool_name': tool_name,
-                'arguments': arguments,
                 'ticket_id': ticket_id,
+                'message': f'[CROSS_WORKER_REQUEST] {json.dumps(payload)}',
+                'message_type': 'cross_worker_request',
             },
-            timeout=60,
+            headers=orchestrator_headers(),
+            timeout=10,
         )
-
         if resp.status_code == 200:
-            data = resp.json()
             return {
                 'success': True,
-                'result': data.get('result'),
-                'from_role': 'doctor',
+                'queued': True,
                 'target_role': target_role,
                 'tool_name': tool_name,
-                'raw_response': data,
+                'note': (
+                    'Request queued on PM inbox. PM will dispatch and the '
+                    'response (if any) will arrive via the admin inbox.'
+                ),
             }
-        elif resp.status_code == 404:
-            return {
-                'success': False,
-                'error': f"No such worker role: {target_role} or tool: {tool_name}",
-                'from_role': 'doctor',
-                'target_role': target_role,
-                'tool_name': tool_name,
-            }
-        else:
-            return {
-                'success': False,
-                'error': f"Cross-worker call failed: HTTP {resp.status_code}",
-                'from_role': 'doctor',
-                'target_role': target_role,
-                'tool_name': tool_name,
-            }
-    except requests.exceptions.Timeout:
-        return {'success': False, 'error': 'Cross-worker call timed out after 60s'}
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
+        return {
+            'success': False,
+            'error': f'Orchestrator rejected the request: HTTP {resp.status_code}',
+        }
+    except Exception as exc:
+        return {'success': False, 'error': str(exc)}
 
 
 # ─── 21. Full-Stack Auto-Remediation (Doctor calls itself recursively) ────────

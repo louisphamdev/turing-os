@@ -63,7 +63,7 @@ agent.register_tools({'my_tool': my_custom_tool, ...})
 | `ROLE` | No | Worker role (default: "default") |
 | `LLM_API_KEY` | Yes | API key for LLM provider |
 | `LLM_PROVIDER` | No | "openai" or "anthropic" (default: openai) |
-| `PLANE_API_URL` | No | Plane API URL (http://taiga-gateway:9000/api/v1) |
+| `PLANE_API_URL` | No | Plane API URL (http://turing_plane_api:8000/api/v1) |
 | `PLANE_API_TOKEN` | No | Plane auth token (auto from init-admin-users.sh) |
 | `PLANE_WORKSPACE_SLUG` | No | Plane project slug |
 

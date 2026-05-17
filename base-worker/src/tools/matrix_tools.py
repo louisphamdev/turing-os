@@ -164,6 +164,7 @@ def notify_admin(message: str, message_type: str = 'info') -> dict:
         dict with success status
     """
     import requests
+    from orchestrator_auth import orchestrator_headers
 
     try:
         resp = requests.post(
@@ -173,6 +174,7 @@ def notify_admin(message: str, message_type: str = 'info') -> dict:
                 'message': message,
                 'message_type': message_type,
             },
+            headers=orchestrator_headers(),
             timeout=10,
         )
         if resp.status_code == 200:
@@ -203,6 +205,7 @@ def ask_admin(question: str, timeout_seconds: int = 300) -> dict:
         dict with 'reply' (admin's response text) or 'timeout' if no reply
     """
     import requests
+    from orchestrator_auth import orchestrator_headers
 
     question_sent_at_ms = int(time_module.time() * 1000)
 
@@ -216,6 +219,7 @@ def ask_admin(question: str, timeout_seconds: int = 300) -> dict:
                 'message_type': 'question',
                 'timeout_seconds': timeout_seconds,
             },
+            headers=orchestrator_headers(),
             timeout=10,
         )
         if resp.status_code != 200:
@@ -249,9 +253,10 @@ def ask_admin(question: str, timeout_seconds: int = 300) -> dict:
 
     if TICKET_ID:
         try:
-            from tools import taiga_tools
+            from tools import state_backend
 
-            status_update = taiga_tools.update_ticket_status(
+            backend = state_backend.get_backend()
+            status_update = backend.update_ticket_status(
                 TICKET_ID,
                 'BLOCKED',
                 timeout_reason,
@@ -260,7 +265,7 @@ def ask_admin(question: str, timeout_seconds: int = 300) -> dict:
             if not blocked:
                 notify_admin(
                     (
-                        f'Admin timeout after {timeout_seconds}s, but Taiga BLOCKED update failed. '
+                        f'Admin timeout after {timeout_seconds}s, but state backend BLOCKED update failed. '
                         f'Reason: {status_update.get("error", "unknown error")}'
                     ),
                     'error',
@@ -295,6 +300,7 @@ def poll_admin_inbox(since_timestamp_ms: Optional[int] = None) -> list:
         list of dicts with 'sender', 'content', 'timestamp'
     """
     import requests
+    from orchestrator_auth import orchestrator_headers
 
     try:
         params = {}
@@ -304,6 +310,7 @@ def poll_admin_inbox(since_timestamp_ms: Optional[int] = None) -> list:
         resp = requests.get(
             f'{ORCHESTRATOR_URL}/webhooks/worker-inbox/{TICKET_ID}',
             params=params,
+            headers=orchestrator_headers(),
             timeout=10,
         )
         if resp.status_code == 200:
@@ -313,16 +320,23 @@ def poll_admin_inbox(since_timestamp_ms: Optional[int] = None) -> list:
         return []
 
 
-# ─── Direct Matrix Communication (Fallback / Low-level) ──────────────────
+# ─── Direct Matrix Communication (DEPRECATED) ────────────────────────────
+#
+# Workers must NOT call the Matrix API with admin credentials — see
+# `.claude/rules/architecture.md`. All admin↔worker traffic goes through
+# the orchestrator relay. If the orchestrator is unreachable, the right
+# response is to surface the error, not to bypass the relay.
 
 def _send_direct_fallback(message: str) -> dict:
-    """Send directly to Matrix room as fallback"""
-    client = get_matrix_client()
-    if not client or not MATRIX_ROOM_ID:
-        return {'success': False, 'error': 'Matrix not configured for direct send'}
-
-    success = client.send_message(MATRIX_ROOM_ID, message)
-    return {'success': success, 'direct': True}
+    """Disabled — direct Matrix sends bypass the orchestrator relay."""
+    return {
+        'success': False,
+        'error': (
+            'Direct Matrix fallback disabled. The worker→admin path must '
+            'go through the orchestrator relay (/webhooks/worker-message). '
+            'If the orchestrator is unreachable, this message is dropped.'
+        ),
+    }
 
 
 def send_matrix_message(room_id: str, message: str) -> dict:

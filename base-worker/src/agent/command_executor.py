@@ -1,7 +1,8 @@
 """
 Command Executor — Handles structured commands from admin via Matrix
 
-Executes commands injected by the orchestrator's intent parser:
+Executes commands injected via the orchestrator's worker-inbox endpoint
+(producer pushes a message with isStructuredCommand=true). Supported types:
 - register_tool: Dynamically add a tool to the agent
 - unregister_tool: Remove a tool from the agent
 - update_config: Update agent configuration (max_iterations, etc.)

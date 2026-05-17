@@ -246,6 +246,7 @@ class CheckpointManager:
         """Notify orchestrator about checkpoint event"""
         try:
             import requests
+            from orchestrator_auth import orchestrator_headers
             requests.post(
                 f'{self._orchestrator_url}/webhooks/checkpoint',
                 json={
@@ -256,6 +257,7 @@ class CheckpointManager:
                     'save_count': self._save_count,
                     'timestamp': time.time(),
                 },
+                headers=orchestrator_headers(),
                 timeout=5,
             )
         except Exception as e:

@@ -10,11 +10,13 @@ RUN npm install
 COPY src/ ./src/
 COPY tsconfig.json ./
 
-# Build TypeScript
-RUN npm run build
+# Build TypeScript then drop devDependencies to slim the runtime image.
+RUN npm run build && npm prune --omit=dev
 
-# Expose port
+# Orchestrator stays root because it mounts /var/run/docker.sock and needs
+# the docker GID, which varies between hosts. Containerization gives the
+# isolation; least-privilege is enforced at the engine level via labels.
+
 EXPOSE 3001
 
-# Run the built app
 CMD ["npm", "start"]

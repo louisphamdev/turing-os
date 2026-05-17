@@ -1,13 +1,22 @@
-import { Router, Request, Response } from 'express';
+// SECURITY: admin-only routes (`/matrix` slash commands, `/workers/:ticketId/recover`)
+// require ADMIN_API_TOKEN via the `requireAdmin` middleware. The Plane webhook
+// (`/plane`) is guarded by `verifyPlaneSignature` when PLANE_WEBHOOK_SECRET is set.
+// Worker→orchestrator routes (`/blocked`, `/completed`, `/worker-message`,
+// `/health/*`, `/checkpoint`, `/worker-inbox/*`) require WORKER_INTERNAL_TOKEN
+// when set; until then they remain open for transitional deployments.
+
+import { Router, Request, Response, RequestHandler } from 'express';
 import { DockerService } from '../core/docker';
 import { WorkerRegistry } from '../core/registry';
 import { matrixService } from '../core/matrix';
 import { HealthMonitor } from '../core/health-monitor';
 import { getRoleSpec } from '../agents/init';
 import { config } from '../config';
-import { priorityQueue, Priority, QueuedTask } from '../core/priority-queue';
+import { priorityQueue, Priority, QueuedTask, normalizePriority } from '../core/priority-queue';
 import { scanTaskDescription } from '../core/security/prompt-filter';
+import { getAuditStore } from '../core/security/audit-store';
 import { natsService, NatsService } from '../core/nats';
+import { makeRequireAdmin, makeRequireWorkerToken, makeVerifyPlaneSignature } from './middleware';
 
 function mirrorToNats(
   registry: WorkerRegistry,
@@ -24,6 +33,10 @@ function mirrorToNats(
 
 const TICKET_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,63}$/;
 
+// Cap admin-question timeout at 1h. Workers should not be able to keep a
+// pending question alive indefinitely (memory + UX).
+const MAX_QUESTION_TIMEOUT_SECONDS = 3600;
+
 function isValidTicketId(value: unknown): value is string {
   return typeof value === 'string' && TICKET_ID_PATTERN.test(value);
 }
@@ -34,9 +47,12 @@ export function webhooksRouter(
   healthMonitor: HealthMonitor
 ): Router {
   const router = Router();
+  const requireAdmin: RequestHandler = makeRequireAdmin();
+  const requireWorker: RequestHandler = makeRequireWorkerToken();
+  const verifyPlaneSig: RequestHandler = makeVerifyPlaneSignature();
 
   // ─── Plane Webhook — Triggers worker provisioning ─────────────────────
-  router.post('/plane', async (req: Request, res: Response) => {
+  router.post('/plane', verifyPlaneSig, async (req: Request, res: Response) => {
     const ticket_id: string = req.body.ticket_id || req.body.ticketId;
 
     if (!ticket_id) {
@@ -46,13 +62,13 @@ export function webhooksRouter(
       return res.status(400).json({ error: 'ticket_id must be 1–64 chars of [a-zA-Z0-9_.-]' });
     }
 
-    const { status, role, priority } = req.body;
-    const taskPriority: Priority = (priority as Priority) || 'P2';
+    const { status, state, role, priority } = req.body;
+    const taskPriority: Priority = normalizePriority(priority);
     console.log(`[Webhook] Plane: ticket=${ticket_id}, status=${status}, role=${role || 'default'}, priority=${taskPriority}`);
 
     // Prompt Injection Filter Check
     const description = req.body.description || req.body.subject || '';
-    const scanResult = scanTaskDescription(description);
+    const scanResult = scanTaskDescription(description, { ticketId: ticket_id, source: 'plane' });
     if (!scanResult.isSafe) {
       console.warn(`[Security] Blocked malicious ticket ${ticket_id}: ${scanResult.reason}`);
       await matrixService.sendDM(config.matrix.adminUserId || '', `🚨 **Security Alert**\nBlocked Plane ticket \`${ticket_id}\` due to suspected Prompt Injection.\nReason: ${scanResult.reason}`);
@@ -65,10 +81,13 @@ export function webhooksRouter(
       return res.status(200).json({ message: 'Already processing', ticket_id });
     }
 
-    // Only process TODO tickets
-    if (status && status.toUpperCase() !== 'TODO') {
-      console.log(`[Webhook] Ticket ${ticket_id} status is ${status}, skipping.`);
-      return res.status(200).json({ message: 'Not a TODO ticket', ticket_id });
+    // Decide whether this ticket is in the "ready-to-pick-up" state.
+    // Plane sends either a string slug (legacy / external callers) or a
+    // structured `state` object with `group` and `name`. Backlog / unstarted
+    // groups are treated as actionable; anything else is skipped.
+    if (!isPickupReady(status, state)) {
+      console.log(`[Webhook] Ticket ${ticket_id} not in a pickup-ready state (status=${status}, state=${JSON.stringify(state)}), skipping.`);
+      return res.status(200).json({ message: 'Not a pickup-ready ticket', ticket_id });
     }
 
     const workerRole = role || 'software-engineer';
@@ -165,7 +184,7 @@ export function webhooksRouter(
   });
 
   // ─── Blocked notification from worker ──────────────────────────────────
-  router.post('/blocked', async (req: Request, res: Response) => {
+  router.post('/blocked', requireWorker, async (req: Request, res: Response) => {
     const { ticket_id, reason } = req.body;
 
     if (!ticket_id) {
@@ -194,7 +213,7 @@ export function webhooksRouter(
   });
 
   // ─── Completion notification from worker ───────────────────────────────
-  router.post('/completed', async (req: Request, res: Response) => {
+  router.post('/completed', requireWorker, async (req: Request, res: Response) => {
     const { ticket_id, summary } = req.body;
 
     if (!ticket_id) {
@@ -225,9 +244,12 @@ export function webhooksRouter(
 
   // ─── Worker → Admin message relay ──────────────────────────────────────
   // Worker sends a message that gets forwarded to its Matrix room
-  router.post('/worker-message', async (req: Request, res: Response) => {
+  router.post('/worker-message', requireWorker, async (req: Request, res: Response) => {
     const { ticket_id, message, message_type } = req.body;
-    const timeoutSeconds = parsePositiveInt(req.body.timeout_seconds) ?? 300;
+    const timeoutSeconds = Math.min(
+      parsePositiveInt(req.body.timeout_seconds) ?? 300,
+      MAX_QUESTION_TIMEOUT_SECONDS,
+    );
 
     if (!ticket_id || !message) {
       return res.status(400).json({ error: 'ticket_id and message are required' });
@@ -262,9 +284,12 @@ export function webhooksRouter(
     }
   });
 
-  // ─── Worker inbox — Worker polls for admin messages ────────────────────
-  // Worker calls this to get messages that admin sent in the Matrix room
-  router.get('/worker-inbox/:ticketId', (req: Request, res: Response) => {
+  // ─── Worker inbox drain (admin-bound messages) ─────────────────────────
+  // Drain is destructive — messages are removed from the queue on read.
+  // The canonical method is POST .../drain. The legacy GET route is kept
+  // for backward-compat with running workers; it sets a Deprecation header
+  // so callers know to migrate.
+  const handleInboxDrain = (req: Request, res: Response) => {
     const { ticketId } = req.params as { ticketId: string };
     if (!isValidTicketId(ticketId)) {
       return res.status(400).json({ error: 'ticketId format invalid' });
@@ -284,10 +309,18 @@ export function webhooksRouter(
       })),
       count: messages.length,
     });
+  };
+
+  router.post('/worker-inbox/:ticketId/drain', requireWorker, handleInboxDrain);
+
+  router.get('/worker-inbox/:ticketId', requireWorker, (req: Request, res: Response) => {
+    res.setHeader('Deprecation', 'true');
+    res.setHeader('Link', '</webhooks/worker-inbox/:ticketId/drain>; rel="successor-version"');
+    handleInboxDrain(req, res);
   });
 
   // ─── Worker inbox peek (non-destructive) ───────────────────────────────
-  router.get('/worker-inbox/:ticketId/peek', (req: Request, res: Response) => {
+  router.get('/worker-inbox/:ticketId/peek', requireWorker, (req: Request, res: Response) => {
     const { ticketId } = req.params as { ticketId: string };
     if (!isValidTicketId(ticketId)) {
       return res.status(400).json({ error: 'ticketId format invalid' });
@@ -309,8 +342,61 @@ export function webhooksRouter(
     });
   });
 
-  // ─── Matrix /unblock command (legacy webhook endpoint) ─────────────────
-  router.post('/matrix', async (req: Request, res: Response) => {
+  // ─── Admin structured command dispatch ─────────────────────────────────
+  // Admin sends `{ target_ticket, command_type, args }`; orchestrator
+  // validates against an allow-list and injects a structured command into
+  // the target worker's inbox. Worker's command_executor handles it.
+  const STRUCTURED_COMMAND_TYPES = new Set([
+    'register_tool',
+    'unregister_tool',
+    'update_config',
+    'set_system_prompt',
+    'reload_role',
+    'reload_skills',
+    'inspect',
+    'save_tool',
+    'load_tools',
+    'delete_tool',
+  ]);
+
+  router.post('/admin-command', requireAdmin, (req: Request, res: Response) => {
+    const { target_ticket, command_type, args } = req.body ?? {};
+
+    if (!target_ticket || typeof target_ticket !== 'string') {
+      return res.status(400).json({ error: 'target_ticket (string) is required' });
+    }
+    if (!isValidTicketId(target_ticket)) {
+      return res.status(400).json({ error: 'target_ticket format invalid' });
+    }
+    if (!command_type || typeof command_type !== 'string') {
+      return res.status(400).json({ error: 'command_type (string) is required' });
+    }
+    if (!STRUCTURED_COMMAND_TYPES.has(command_type)) {
+      return res.status(400).json({
+        error: `Unknown command_type '${command_type}'`,
+        allowed: Array.from(STRUCTURED_COMMAND_TYPES),
+      });
+    }
+    if (args !== undefined && (typeof args !== 'object' || args === null || Array.isArray(args))) {
+      return res.status(400).json({ error: 'args must be a plain object when provided' });
+    }
+
+    if (!registry.lookupByTicket(target_ticket)) {
+      return res.status(404).json({ error: `target_ticket ${target_ticket} not registered` });
+    }
+
+    const sender = String((req.get('x-admin-sender') as string) || 'admin');
+    matrixService.pushStructuredCommand(target_ticket, sender, {
+      type: command_type,
+      args: (args as Record<string, any>) || {},
+    });
+
+    console.log(`[AdminCommand] ${sender} → ${target_ticket}: ${command_type}`);
+    res.status(202).json({ queued: true, target_ticket, command_type });
+  });
+
+  // ─── Matrix /unblock command (admin-only) ──────────────────────────────
+  router.post('/matrix', requireAdmin, async (req: Request, res: Response) => {
     const commandData = matrixService.parseCommand(req.body);
 
     if (!commandData) {
@@ -385,7 +471,7 @@ export function webhooksRouter(
   });
 
   // ─── Health heartbeat from worker ──────────────────────────────────────
-  router.post('/health/heartbeat', (req: Request, res: Response) => {
+  router.post('/health/heartbeat', requireWorker, (req: Request, res: Response) => {
     const { ticket_id, status, progress, checkpoint_count, last_checkpoint_iteration, last_checkpoint_age } = req.body;
 
     if (!ticket_id) {
@@ -401,9 +487,9 @@ export function webhooksRouter(
     if (registry.lookupByTicket(ticket_id)) {
       registry.update(ticket_id, {
         lastCheckpointTime: Date.now(),
-        lastCheckpointIteration: last_checkpoint_iteration || 0,
-        checkpointCount: checkpoint_count || 0,
-      } as any);
+        lastCheckpointIteration: typeof last_checkpoint_iteration === 'number' ? last_checkpoint_iteration : 0,
+        checkpointCount: typeof checkpoint_count === 'number' ? checkpoint_count : 0,
+      });
     }
 
     mirrorToNats(registry, ticket_id, 'heartbeat', {
@@ -417,7 +503,7 @@ export function webhooksRouter(
   });
 
   // ─── Checkpoint events from worker ─────────────────────────────────────
-  router.post('/checkpoint', (req: Request, res: Response) => {
+  router.post('/checkpoint', requireWorker, (req: Request, res: Response) => {
     const { ticket_id, role, event, iteration, save_count, timestamp } = req.body;
 
     if (!ticket_id) {
@@ -435,15 +521,15 @@ export function webhooksRouter(
         lastCheckpointTime: Date.now(),
         lastCheckpointIteration: iteration || 0,
         checkpointCount: save_count || 0,
-      } as any);
+      });
     }
 
     res.status(200).json({ ack: true, event, ticket_id });
   });
 
   // ─── Worker recovery: restart from checkpoint ──────────────────────────
-  // PM calls this to respawn a crashed worker that resumes from checkpoint
-  router.post('/workers/:ticketId/recover', async (req: Request, res: Response) => {
+  // Admin-only because spawning a container is a privileged action.
+  router.post('/workers/:ticketId/recover', requireAdmin, async (req: Request, res: Response) => {
     const ticketId = req.params.ticketId as string;
     if (!isValidTicketId(ticketId)) {
       return res.status(400).json({ error: 'ticketId format invalid' });
@@ -548,6 +634,23 @@ export function webhooksRouter(
     }
   });
 
+  // ─── Audit log — Prompt-filter and gateway channels (admin-only) ───────
+  router.get('/audit/:channel', requireAdmin, async (req: Request, res: Response) => {
+    const channel = String(req.params.channel || '');
+    const ALLOWED = new Set(['prompt-filter', 'gateway']);
+    if (!ALLOWED.has(channel)) {
+      return res.status(400).json({ error: `Unknown audit channel '${channel}'`, allowed: Array.from(ALLOWED) });
+    }
+    const countRaw = parsePositiveInt(req.query.count) ?? 100;
+    const count = Math.min(countRaw, 1000);
+    try {
+      const entries = await getAuditStore().tail(channel, count);
+      res.json({ channel, count: entries.length, entries });
+    } catch (err: any) {
+      res.status(500).json({ error: String(err?.message || err) });
+    }
+  });
+
   // ─── Get role spec for a worker ────────────────────────────────────────
   router.get('/roles/:roleId', (req: Request, res: Response) => {
     const { roleId } = req.params as { roleId: string };
@@ -561,6 +664,31 @@ export function webhooksRouter(
   });
 
   return router;
+}
+
+/**
+ * True if the ticket payload describes a state the worker pool should
+ * pick up. Accepts: missing status (assume ready), legacy "TODO"-like
+ * slugs, and Plane's structured state object with group ∈ {backlog,
+ * unstarted, started}.
+ */
+function isPickupReady(status: unknown, state: unknown): boolean {
+  if (!status && !state) return true;
+
+  if (typeof status === 'string') {
+    const slug = status.toUpperCase();
+    const READY_SLUGS = new Set(['TODO', 'TO-DO', 'TO_DO', 'BACKLOG', 'OPEN', 'NEW', 'READY']);
+    if (READY_SLUGS.has(slug)) return true;
+  }
+
+  if (state && typeof state === 'object') {
+    const group = String((state as { group?: unknown }).group || '').toLowerCase();
+    if (group === 'backlog' || group === 'unstarted' || group === 'started') return true;
+    const name = String((state as { name?: unknown }).name || '').toUpperCase();
+    if (name === 'TODO' || name === 'OPEN' || name === 'BACKLOG') return true;
+  }
+
+  return false;
 }
 
 function parseSinceTimestamp(rawValue: unknown): number | undefined {

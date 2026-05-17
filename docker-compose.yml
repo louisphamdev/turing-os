@@ -315,6 +315,16 @@ services:
       - AUTO_START_ROLES
       - ALERT_WEBHOOK_URL
       - ALERT_COOLDOWN_MS
+      # Auth tokens — all loaded from .env. ADMIN_API_TOKEN gates admin
+      # routes; WORKER_INTERNAL_TOKEN gates worker→orchestrator webhooks;
+      # PLANE_WEBHOOK_SECRET gates /webhooks/plane.
+      - ADMIN_API_TOKEN
+      - WORKER_INTERNAL_TOKEN
+      - PLANE_WEBHOOK_SECRET
+      - PLANE_WEBHOOK_SIGNATURE_HEADER
+      - JWT_SECRET
+      - VAULT_MASTER_KEY
+      - GATEWAY_ENABLED
     networks:
       - turing_network
     depends_on:

@@ -41,9 +41,11 @@ def notify_orchestrator(endpoint: str, data: dict):
     """Send notification to orchestrator (best-effort)"""
     try:
         import requests
+        from orchestrator_auth import orchestrator_headers
         requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/{endpoint}',
             json=data,
+            headers=orchestrator_headers(),
             timeout=5,
         )
     except Exception as e:
@@ -118,8 +120,10 @@ def poll_admin_inbox() -> list:
     """Poll orchestrator for pending admin messages"""
     try:
         import requests
+        from orchestrator_auth import orchestrator_headers
         resp = requests.get(
             f'{ORCHESTRATOR_URL}/webhooks/worker-inbox/{TICKET_ID}',
+            headers=orchestrator_headers(),
             timeout=5,
         )
         if resp.status_code == 200:
@@ -130,9 +134,16 @@ def poll_admin_inbox() -> list:
 
 
 def send_to_admin(message: str, message_type: str = 'info'):
-    """Send message to admin via orchestrator → Matrix"""
+    """Send message to admin via orchestrator → Matrix.
+
+    No direct-Matrix fallback: per the architecture rules, workers must
+    never speak Matrix with admin credentials. If the orchestrator is
+    unreachable, the message is dropped and surfaced in the log so the
+    incident is visible instead of silently bypassing the relay.
+    """
     try:
         import requests
+        from orchestrator_auth import orchestrator_headers
         requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/worker-message',
             json={
@@ -140,28 +151,11 @@ def send_to_admin(message: str, message_type: str = 'info'):
                 'message': message,
                 'message_type': message_type,
             },
+            headers=orchestrator_headers(),
             timeout=5,
         )
     except Exception as e:
-        log(f"Failed to send message to admin: {e}", 'WARN')
-        # Fallback: send directly via Matrix
-        _send_matrix_direct(message)
-
-
-def _send_matrix_direct(message: str):
-    """Fallback: send directly to Matrix room"""
-    if not MATRIX_ROOM_ID:
-        return
-    try:
-        from tools.matrix_tools import MatrixClient
-        api_url = os.environ.get('SYNAPSE_API_URL', 'http://synapse:8008')
-        token = os.environ.get('MATRIX_BOT_TOKEN', '')
-        if token:
-            client = MatrixClient(api_url, token)
-            client.join_room(MATRIX_ROOM_ID)
-            client.send_message(MATRIX_ROOM_ID, message)
-    except Exception:
-        pass
+        log(f"Dropped message to admin (orchestrator unreachable): {e}", 'ERROR')
 
 
 def _heartbeat_loop():
@@ -194,9 +188,11 @@ def _heartbeat_loop():
             if mem_mb is not None:
                 payload['memory_mb'] = round(mem_mb, 1)
 
+            from orchestrator_auth import orchestrator_headers
             requests.post(
-                f'{ORCHESTRATOR_URL}/webhooks/heartbeat',
+                f'{ORCHESTRATOR_URL}/webhooks/health/heartbeat',
                 json=payload,
+                headers=orchestrator_headers(),
                 timeout=5,
             )
             log(f"[Heartbeat] sent — CPU:{cpu_percent}% RAM:{mem_mb:.0f}MB" if cpu_percent else "[Heartbeat] sent", 'DEBUG')
@@ -215,8 +211,11 @@ def main():
         log("FATAL: TICKET_ID environment variable is required", 'ERROR')
         sys.exit(1)
 
-    if not LLM_API_KEY:
-        log("FATAL: LLM_API_KEY environment variable is required", 'ERROR')
+    # Workers run in gateway-only mode now. The orchestrator injects
+    # CONSUMER_TOKEN + GATEWAY_URL on spawn; LLM_API_KEY is no longer
+    # required in the worker's environment.
+    if not os.environ.get('CONSUMER_TOKEN') or not os.environ.get('GATEWAY_URL'):
+        log("FATAL: CONSUMER_TOKEN + GATEWAY_URL must be set by the orchestrator on spawn", 'ERROR')
         sys.exit(1)
 
     # ── Start heartbeat thread ───────────────────────────────────────────

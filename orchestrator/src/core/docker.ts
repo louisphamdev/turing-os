@@ -1,6 +1,5 @@
 import Docker from 'dockerode';
-import { config, llmProviderRequiresApiKey } from '../config';
-import { matrixService } from './matrix';
+import { config } from '../config';
 import { getCredentialVault } from './credential-vault';
 import { getConsumerTokenManager } from './consumer-token';
 import { getRBACService, Role } from './rbac';
@@ -27,7 +26,6 @@ export class DockerService {
   private docker: Docker;
   private secretsCache: Map<string, { value: string; fetchedAt: number }> = new Map();
   private static readonly SECRETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
-  private gatewayEnabled: boolean;
 
   constructor() {
     const socketPath = config.docker.host;
@@ -36,9 +34,9 @@ export class DockerService {
         ? { socketPath: socketPath.replace('unix://', '') }
         : { socketPath }
     );
-    // Gateway is ON by default (matches the project-wide rule that external calls route through the proxy).
-    // Set GATEWAY_ENABLED=false explicitly to fall back to legacy direct-key mode.
-    this.gatewayEnabled = process.env.GATEWAY_ENABLED !== 'false';
+    // Gateway is now mandatory. Legacy direct-key mode has been removed —
+    // workers must run with a consumer token and route external calls
+    // through the orchestrator gateway proxy. See `.claude/rules/architecture.md`.
   }
 
   async spawnWorker(ticketId: string, role: string, roomId: string = ''): Promise<string> {
@@ -79,108 +77,47 @@ export class DockerService {
       `WORKER_NATS_SUBSCRIBE=${process.env.WORKER_NATS_SUBSCRIBE || 'true'}`,
     ];
 
-    // Gateway mode: inject consumer token instead of real API keys
-    if (this.gatewayEnabled) {
-      const tokenManager = getConsumerTokenManager();
-      const rbac = getRBACService();
-      const vault = getCredentialVault();
-
-      // Get worker ID from container name
-      const workerId = containerName;
-
-      // Generate consumer token with role-based permissions
-      const permissions = rbac.getPermissionsForRole(role as Role);
-      const rateLimit = rbac.getRateLimitForRole(role as Role);
-      const expiresIn = rbac.getTokenExpiryForRole(role as Role);
-
-      const { token, expiresAt, tokenId } = tokenManager.generateToken({
-        workerId,
-        role: role as Role,
-        permissions,
-        rateLimit,
-        expiresIn,
-        metadata: {
-          ticketId,
-          description: `Worker for ticket ${ticketId}`,
-        },
-      });
-
-      // Ensure vault has credentials (import from environment if needed)
-      await this._ensureVaultCredentials(vault);
-
-      // Gateway URL for worker to use
-      const gatewayUrl = process.env.GATEWAY_URL || `http://orchestrator:${config.port}`;
-
-      envVars.push(
-        `GATEWAY_URL=${gatewayUrl}`,
-        `CONSUMER_TOKEN=${token}`,
-        `GATEWAY_ENABLED=true`,
-      );
-
-      console.log(`[Docker] Gateway mode: spawned worker ${workerId} with consumer token (expires: ${expiresAt.toISOString()})`);
-
-      // Store token info for later reference
-      const container = await this.docker.createContainer({
-        name: containerName,
-        Image: imageName,
-        Env: envVars,
-        HostConfig: {
-          AutoRemove: true,
-          Memory: config.docker.workerRamMb * 1024 * 1024,
-          NanoCpus: config.docker.workerCpuCount * 1_000_000_000,
-          Binds: ['worker_workspace:/workspace'],
-        },
-        NetworkingConfig: {
-          EndpointsConfig: {
-            [config.docker.networkName]: {},
-          }
-        },
-        Labels: {
-          'turing-worker': 'true',
-          'ticket-id': ticketId,
-          'worker-role': role,
-          'gateway-mode': 'true',
-          'consumer-token-id': tokenId,
-          'com.docker.compose.project': 'turing-os',
-          'com.docker.compose.service': 'worker',
-        },
-        Healthcheck: {
-          Test: ['CMD-SHELL', 'ps aux | grep "[p]ython main.py" || exit 1'],
-          Interval: 30000000000, // 30s
-          Timeout: 10000000000,  // 10s
-          Retries: 3,
-        },
-      });
-
-      await container.start();
-      console.log(`[Docker] Spawned gateway-mode worker container ${containerName} for ticket ${ticketId} (role: ${role})`);
-
-      return container.id;
+    // Shared secret for worker → orchestrator webhooks. Forwarded only when
+    // set on the orchestrator side; workers then send it on every request.
+    if (process.env.WORKER_INTERNAL_TOKEN) {
+      envVars.push(`WORKER_INTERNAL_TOKEN=${process.env.WORKER_INTERNAL_TOKEN}`);
     }
 
-    // Legacy mode: pass real API keys directly (for migration/development)
-    console.log(`[Docker] Legacy mode: spawning worker with direct API keys (GATEWAY_ENABLED=false)`);
+    // Gateway-only mode (mandatory). Inject a per-worker consumer token;
+    // no raw API keys cross the container boundary.
+    const tokenManager = getConsumerTokenManager();
+    const rbac = getRBACService();
+    const vault = getCredentialVault();
 
-    const apiKey = config.llm.apiKey;
-    const provider = config.llm.provider;
+    const workerId = containerName;
 
-    // Retrieve Context7 API key from Wiki (with caching)
-    const context7ApiKey = await this._getSecretCached('context7-api-key');
+    const permissions = rbac.getPermissionsForRole(role as Role);
+    const rateLimit = rbac.getRateLimitForRole(role as Role);
+    const expiresIn = rbac.getTokenExpiryForRole(role as Role);
 
-    if (llmProviderRequiresApiKey(provider) && !apiKey) {
-      throw new Error('LLM_API_KEY not configured in environment');
-    }
+    const { token, expiresAt, tokenId } = tokenManager.generateToken({
+      workerId,
+      role: role as Role,
+      permissions,
+      rateLimit,
+      expiresIn,
+      metadata: {
+        ticketId,
+        description: `Worker for ticket ${ticketId}`,
+      },
+    });
+
+    await this._ensureVaultCredentials(vault);
+
+    const gatewayUrl = process.env.GATEWAY_URL || `http://orchestrator:${config.port}`;
 
     envVars.push(
-      `LLM_API_KEY=${apiKey}`,
-      `LLM_PROVIDER=${provider}`,
-      `LLM_MODEL=${config.llm.model}`,
-      `LLM_BASE_URL=${config.llm.baseUrl}`,
-      `BOOKSTACK_TOKEN=${config.bookstack.apiToken}`,
-      `CONTEXT7_API_KEY=${context7ApiKey || config.context7.apiKey || ''}`,
-      `MATRIX_BOT_TOKEN=${config.matrix.botToken}`,
-      `GATEWAY_ENABLED=false`,
+      `GATEWAY_URL=${gatewayUrl}`,
+      `CONSUMER_TOKEN=${token}`,
+      `GATEWAY_ENABLED=true`,
     );
+
+    console.log(`[Docker] Spawning worker ${workerId} with consumer token (expires: ${expiresAt.toISOString()})`);
 
     const container = await this.docker.createContainer({
       name: containerName,
@@ -201,7 +138,8 @@ export class DockerService {
         'turing-worker': 'true',
         'ticket-id': ticketId,
         'worker-role': role,
-        'gateway-mode': 'false',
+        'gateway-mode': 'true',
+        'consumer-token-id': tokenId,
         'com.docker.compose.project': 'turing-os',
         'com.docker.compose.service': 'worker',
       },
@@ -214,7 +152,7 @@ export class DockerService {
     });
 
     await container.start();
-    console.log(`[Docker] Spawned legacy-mode worker container ${containerName} for ticket ${ticketId} (role: ${role})`);
+    console.log(`[Docker] Spawned worker container ${containerName} for ticket ${ticketId} (role: ${role})`);
 
     return container.id;
   }

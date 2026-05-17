@@ -109,13 +109,15 @@ class HermesAgent:
         self.register_tool('research_with_context7', research_tools.research_with_context7_sync)
         self.register_tool('get_research_capabilities', research_tools.get_research_capabilities)
 
-        # Matrix communication tools (bidirectional admin ↔ worker)
+        # Matrix communication tools (bidirectional admin ↔ worker, via
+        # the orchestrator relay — these route through /webhooks/worker-message
+        # and /webhooks/worker-inbox/* with the worker's CONSUMER_TOKEN).
         self.register_tool('ask_admin', matrix_tools.ask_admin)
         self.register_tool('notify_admin', matrix_tools.notify_admin)
         self.register_tool('poll_admin_inbox', matrix_tools.poll_admin_inbox)
-        # Low-level Matrix tools (backward compatibility)
-        self.register_tool('send_matrix_message', matrix_tools.send_matrix_message)
-        self.register_tool('get_matrix_messages', matrix_tools.get_matrix_messages)
+        # Direct Matrix tools (send_matrix_message / get_matrix_messages) are
+        # intentionally NOT registered: workers must never speak Matrix with
+        # admin credentials. Use ask_admin/notify_admin instead.
 
         # PM monitoring tools (for pm role to proactively monitor project)
         from tools import pm_monitor
@@ -529,6 +531,7 @@ BLOCKED: <reason you cannot proceed>
         orchestrator_url = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrator:3001')
         try:
             import requests
+            from orchestrator_auth import orchestrator_headers
             requests.post(
                 f'{orchestrator_url}/webhooks/health/heartbeat',
                 json={
@@ -537,6 +540,7 @@ BLOCKED: <reason you cannot proceed>
                     'status': 'working',
                     'progress': progress,
                 },
+                headers=orchestrator_headers(),
                 timeout=5,
             )
         except Exception:
@@ -629,62 +633,19 @@ class OpenAIAgent(HermesAgent):
     """
 
     def _call_llm(self, messages: list[AgentMessage] = None) -> dict:
-        """Call OpenAI API (direct or via gateway)"""
-        # Check if gateway mode is enabled
+        """Call the LLM via the orchestrator gateway.
+
+        Gateway mode is mandatory now — workers no longer hold raw API keys.
+        If GATEWAY_URL or CONSUMER_TOKEN is missing the spawn was misconfigured.
+        """
         gateway_url = os.environ.get('GATEWAY_URL')
-        gateway_enabled = os.environ.get('GATEWAY_ENABLED', 'false').lower() == 'true'
         consumer_token = os.environ.get('CONSUMER_TOKEN')
-
-        if gateway_enabled and gateway_url and consumer_token:
-            return self._call_llm_via_gateway(messages)
-        else:
-            return self._call_llm_direct(messages)
-
-    def _call_llm_direct(self, messages: list[AgentMessage] = None) -> dict:
-        """Call OpenAI API directly. Legacy mode — gateway is the supported path."""
-        from openai import OpenAI
-
-        if not getattr(self, "_warned_legacy_llm", False):
-            print("[Hermes] WARNING: using legacy direct LLM mode. Set GATEWAY_ENABLED=true to route through the orchestrator gateway.")
-            self._warned_legacy_llm = True
-        if not self.api_key:
-            raise RuntimeError("LLM_API_KEY not set and gateway mode is disabled — worker cannot reach the LLM")
-        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
-
-        # Convert messages to OpenAI format
-        # NOTE: Many OpenAI-compatible APIs don't support system role, so we prepend to first user message
-        system_content = ""
-        openai_messages = []
-        for msg in (messages or self.messages):
-            if msg.role == 'system':
-                system_content = msg.content
-            elif msg.role == 'user':
-                if system_content:
-                    openai_messages.append({"role": "user", "content": system_content + "\n\n" + msg.content})
-                    system_content = ""
-                else:
-                    openai_messages.append({"role": "user", "content": msg.content})
-            elif msg.role == 'assistant':
-                openai_messages.append({"role": "assistant", "content": msg.content})
-            elif msg.role == 'tool':
-                # Add tool results as user messages (for text-based tool calling)
-                openai_messages.append({"role": "user", "content": msg.content})
-
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=openai_messages,
-            temperature=0.3,
-            max_tokens=4096,
-        )
-
-        return {
-            'content': response.choices[0].message.content,
-            'usage': {
-                'prompt_tokens': response.usage.prompt_tokens,
-                'completion_tokens': response.usage.completion_tokens,
-                'total_tokens': response.usage.total_tokens,
-            }
-        }
+        if not gateway_url or not consumer_token:
+            raise RuntimeError(
+                'LLM gateway is not configured (GATEWAY_URL + CONSUMER_TOKEN). '
+                'Workers must be spawned with gateway mode.'
+            )
+        return self._call_llm_via_gateway(messages)
 
     def _call_llm_via_gateway(self, messages: list[AgentMessage] = None) -> dict:
         """Call LLM via Turing OS Gateway Proxy"""
@@ -756,16 +717,13 @@ class MiniMaxAgent(HermesAgent):
     """
     
     def _call_llm(self, messages: list[AgentMessage] = None) -> dict:
-        """Call MiniMax API (direct or via gateway)"""
-        # Check if gateway mode is enabled
-        gateway_url = os.environ.get('GATEWAY_URL')
-        gateway_enabled = os.environ.get('GATEWAY_ENABLED', 'false').lower() == 'true'
-        consumer_token = os.environ.get('CONSUMER_TOKEN')
-
-        if gateway_enabled and gateway_url and consumer_token:
-            return self._call_llm_via_gateway(messages)
-        else:
-            return self._call_llm_direct(messages)
+        """Call MiniMax via the orchestrator gateway (mandatory)."""
+        if not os.environ.get('GATEWAY_URL') or not os.environ.get('CONSUMER_TOKEN'):
+            raise RuntimeError(
+                'LLM gateway is not configured (GATEWAY_URL + CONSUMER_TOKEN). '
+                'Workers must be spawned with gateway mode.'
+            )
+        return self._call_llm_via_gateway(messages)
 
     def _call_llm_direct(self, messages: list[AgentMessage] = None) -> dict:
         """Call MiniMax API directly"""
@@ -875,16 +833,13 @@ class AnthropicAgent(HermesAgent):
     """
 
     def _call_llm(self, messages: list[AgentMessage] = None) -> dict:
-        """Call Anthropic Claude API (direct or via gateway)"""
-        # Check if gateway mode is enabled
-        gateway_url = os.environ.get('GATEWAY_URL')
-        gateway_enabled = os.environ.get('GATEWAY_ENABLED', 'false').lower() == 'true'
-        consumer_token = os.environ.get('CONSUMER_TOKEN')
-
-        if gateway_enabled and gateway_url and consumer_token:
-            return self._call_llm_via_gateway(messages)
-        else:
-            return self._call_llm_direct(messages)
+        """Call Anthropic via the orchestrator gateway (mandatory)."""
+        if not os.environ.get('GATEWAY_URL') or not os.environ.get('CONSUMER_TOKEN'):
+            raise RuntimeError(
+                'LLM gateway is not configured (GATEWAY_URL + CONSUMER_TOKEN). '
+                'Workers must be spawned with gateway mode.'
+            )
+        return self._call_llm_via_gateway(messages)
 
     def _call_llm_direct(self, messages: list[AgentMessage] = None) -> dict:
         """Call Anthropic Claude API directly. Legacy mode — gateway is the supported path."""

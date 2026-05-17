@@ -46,9 +46,8 @@ Project Turing OS is a multi-agent system with:
 - API key management for external services
 
 ### 2. Prompt Injection Prevention
-- Filtering malicious content from Taiga tickets
-- Sanitizing Matrix message input
-- Validating intent parser input boundaries
+- Filtering malicious content from Plane tickets
+- Sanitizing Matrix message input before relay to PM/PO inbox
 - Preventing prompt leakage in tool calls
 
 ### 3. Network Security
@@ -106,7 +105,7 @@ Project Turing OS is a multi-agent system with:
 - JWT stored in `Authorization: Bearer <token>` header
 - RBAC middleware at `orchestrator/src/core/rbac.ts`
 - Secrets retrieved from BookStack API, not hardcoded
-- Matrix messages filtered through intent parser
+- Matrix messages relayed verbatim to PM/PO; only PM/PO LLMs interpret them
 
 ## Related Documentation
 

@@ -1,11 +1,12 @@
 /**
- * BookStack Proxy - Proxies BookStack API calls
- * 
- * Intercepts BookStack API calls, injects the real API token from vault,
- * and logs all requests for audit purposes.
+ * BookStack Proxy — REST passthrough.
+ *
+ * Forwards the caller's HTTP method, query string, and body to BookStack's
+ * REST API at `{BOOKSTACK_URL}/api/{endpoint}`, injecting the vault-held
+ * API token in the `Authorization: Token <key>` header (BookStack's scheme,
+ * not Bearer). Returns the upstream JSON verbatim.
  */
 
-import { DecryptedCredential } from '../credential-vault';
 import { AuditLogger } from './audit-logger';
 import { TokenPayload } from '../consumer-token';
 
@@ -18,76 +19,71 @@ export class BookStackProxy {
     this.auditLogger = auditLogger;
   }
 
-  /**
-   * Get BookStack API URL from config
-   */
   private getBookStackConfig(): { apiUrl: string } {
-    return {
-      apiUrl: process.env.BOOKSTACK_URL || 'http://bookstack:80',
-    };
+    return { apiUrl: process.env.BOOKSTACK_URL || 'http://bookstack:80' };
   }
 
   /**
-   * Proxy a BookStack API request
+   * Proxy a BookStack API request.
+   *
+   * @param endpoint REST path after `/gateway/bookstack/`, e.g. `pages/123`.
+   * @param method   HTTP method to forward.
+   * @param body     Parsed JSON body (forwarded only for non-safe methods).
+   * @param query    Query string params, forwarded verbatim.
    */
   async proxy(
     tokenPayload: TokenPayload,
     endpoint: string,
     method: string,
-    body: { query?: string; variables?: any },
-    headers: any
+    body: any,
+    query: Record<string, any> = {},
   ): Promise<any> {
     const config = this.getBookStackConfig();
 
-    // Get the real API token from vault
     let credential = await this.vault.getCredentialByType('bookstack');
-    
     if (!credential) {
-      // Fallback: use environment variable
       const fallbackToken = process.env.BOOKSTACK_TOKEN;
       if (!fallbackToken) {
         throw { message: 'No BookStack credential configured', statusCode: 503 };
       }
-      credential = { key: fallbackToken, type: 'bookstack', provider: 'generic', id: 'env', authHeader: 'Bearer' };
+      credential = { key: fallbackToken, type: 'bookstack', provider: 'generic', id: 'env' };
     }
 
-    // Build the target URL
-    const targetUrl = endpoint === 'graphql' || !endpoint
-      ? `${config.apiUrl}/graphql`
-      : `${config.apiUrl}/${endpoint}`;
-    
-    // Build request headers
+    const cleanEndpoint = (endpoint || '').replace(/^\/+/, '');
+    const qs = buildQueryString(query);
+    const targetUrl = `${config.apiUrl}/api/${cleanEndpoint}${qs ? `?${qs}` : ''}`;
+
     const requestHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${credential.key}`,
+      'Accept': 'application/json',
+      'Authorization': `Token ${credential.key}`,
     };
+
+    const upperMethod = method.toUpperCase();
+    const sendBody = upperMethod !== 'GET' && upperMethod !== 'HEAD' && body !== undefined && body !== null;
+    if (sendBody) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
 
     this.auditLogger.logServiceRequest({
       workerId: tokenPayload.workerId,
       role: tokenPayload.role,
       tokenId: tokenPayload.jti,
       service: 'bookstack',
-      method: `${method} /graphql`,
-      requestBody: body,
+      method: `${upperMethod} /${cleanEndpoint}`,
+      requestBody: sendBody ? body : undefined,
     });
 
-    // Make the actual API call
-    const response = await this.makeRequest(targetUrl, method, requestHeaders, body);
-
-    return response;
+    return this.makeRequest(targetUrl, upperMethod, requestHeaders, sendBody ? body : undefined);
   }
 
-  /**
-   * Make the HTTP request to BookStack
-   */
   private async makeRequest(
     url: string,
     method: string,
     headers: Record<string, string>,
-    body?: any
+    body?: any,
   ): Promise<any> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    const timeout = setTimeout(() => controller.abort(), 30000);
 
     try {
       const response = await fetch(url, {
@@ -96,7 +92,6 @@ export class BookStackProxy {
         body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
-
       clearTimeout(timeout);
 
       if (!response.ok) {
@@ -108,15 +103,32 @@ export class BookStackProxy {
         };
       }
 
-      return await response.json();
+      const text = await response.text();
+      if (!text) return { success: true };
+      try {
+        return JSON.parse(text);
+      } catch {
+        return { raw: text };
+      }
     } catch (error: any) {
       clearTimeout(timeout);
-      
       if (error.name === 'AbortError') {
         throw { message: 'BookStack request timeout', statusCode: 504 };
       }
-      
       throw error;
     }
   }
+}
+
+function buildQueryString(params: Record<string, any>): string {
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value === undefined || value === null) continue;
+    if (Array.isArray(value)) {
+      for (const v of value) parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(v))}`);
+    } else {
+      parts.push(`${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`);
+    }
+  }
+  return parts.join('&');
 }

@@ -63,7 +63,6 @@ Orchestrator (3001) ──── Docker Socket ──── Worker Containers
 | `priority-queue.ts` | P0-P3 queue with interrupt capability |
 | `rbac.ts` | Role-based access control |
 | `matrix.ts` | Matrix/Synapse relay |
-| `intent-parser.ts` | LLM-powered command parser |
 | `pm-state.ts` | PM state persistence for failover |
 | `gateway/` | Proxy + Credential Vault + Consumer Tokens |
 
@@ -80,7 +79,6 @@ Orchestrator (3001) ──── Docker Socket ──── Worker Containers
 | File | Purpose |
 |------|---------|
 | `init.ts` | Role initialization for auto-start |
-| `orchestrator-agent.ts` | LLM-powered OrchestratorAgent for Matrix messages |
 
 ## Key Patterns
 
@@ -101,14 +99,16 @@ healthMonitor.watch(workerId);
 
 ### Message Flow (Bidirectional HITL)
 ```
-Admin → Matrix Room → handleMatrixMessage() → OrchestratorAgent.think()
+Admin → Matrix Room → handleMatrixMessage() → pushToWorkerInbox(PM/PO)
                                                     │
                                                     ▼
-                                              LLM interprets
+                              PM/PO container polls /worker-inbox/:ticketId
                                                     │
                                                     ▼
-Worker ← HTTP Poll ← matrixService.sendToRoom() ← Reply
+Admin ← Matrix Room ← matrixService.sendToWorkerRoom() ← Worker reply (HTTP)
 ```
+Orchestrator is a transport relay. Only `pm` and `po` rooms accept admin
+messages; messages in any other worker room are redirected to PM.
 
 ### RBAC Enforcement
 ```typescript
@@ -121,8 +121,8 @@ const allowed = rbacService.canAccess(role, resource, action);
 
 | File | Purpose |
 |------|---------|
-| `orchestrator/src/index.ts` | Main entry, bootstrap all services |
-| `orchestrator/src/core/orchestrator-agent.ts` | LLM-powered message handling |
+| `orchestrator/src/index.ts` | Main entry, bootstrap all services, Matrix relay handler |
+| `orchestrator/src/core/matrix.ts` | Matrix sync loop, per-worker rooms, inbox queue |
 | `orchestrator/src/core/docker.ts` | Container lifecycle |
 | `pm-failover.md` | PM failover documentation |
 | `timeout-policy.md` | 5min timeout, 3 retries |
@@ -134,7 +134,7 @@ const allowed = rbacService.canAccess(role, resource, action);
 - **Modify RBAC**: Edit `orchestrator/src/core/rbac.ts`
 - **Add new worker tool**: Document in skills, NOT in agent
 - **Debug worker spawn**: Check `docker.ts:spawnWorker()` and registry state
-- **Intent parser changes**: Edit `orchestrator/src/core/intent-parser.ts`
+- **Matrix relay rules**: Edit `CHATTABLE_ROLES` set in `orchestrator/src/index.ts`
 
 ## Testing
 

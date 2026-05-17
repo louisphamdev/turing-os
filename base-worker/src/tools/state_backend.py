@@ -57,16 +57,21 @@ _PLANE_STATUS_TO_GROUP: dict[str, tuple[str, list[str]]] = {
 
 
 class PlaneBackend(StateBackend):
-    """Plane CE backend wired against the public REST API."""
+    """Plane CE backend (gateway-only).
+
+    Every call routes through the orchestrator gateway
+    (`GATEWAY_URL/gateway/plane/...`) using the worker's CONSUMER_TOKEN.
+    The orchestrator scopes the request to the configured workspace +
+    project and injects the Plane API key from the credential vault, so
+    the worker never sees `PLANE_API_TOKEN`.
+    """
 
     name = "plane"
 
     def __init__(self) -> None:
-        self.api_url = os.environ.get("PLANE_API_URL", "").rstrip("/")
-        self.api_token = os.environ.get("PLANE_API_TOKEN", "")
-        self.workspace = os.environ.get("PLANE_WORKSPACE_SLUG", "")
-        self.project = os.environ.get("PLANE_PROJECT_ID", "")
         self._state_cache: Optional[list[dict]] = None
+        self._gateway_url = os.environ.get("GATEWAY_URL", "").rstrip("/")
+        self._consumer_token = os.environ.get("CONSUMER_TOKEN", "")
 
     # ─── Public API ────────────────────────────────────────────────────────
 
@@ -139,34 +144,27 @@ class PlaneBackend(StateBackend):
 
     def _missing_config(self) -> Optional[dict]:
         missing = []
-        if not self.api_url:
-            missing.append("PLANE_API_URL")
-        if not self.api_token:
-            missing.append("PLANE_API_TOKEN")
-        if not self.workspace:
-            missing.append("PLANE_WORKSPACE_SLUG")
-        if not self.project:
-            missing.append("PLANE_PROJECT_ID")
+        if not self._gateway_url:
+            missing.append("GATEWAY_URL")
+        if not self._consumer_token:
+            missing.append("CONSUMER_TOKEN")
         if missing:
-            return self._error(f"Plane env vars not configured: {', '.join(missing)}")
+            return self._error(f"Gateway env vars not configured: {', '.join(missing)}")
         return None
 
     def _error(self, message: str) -> dict:
         return {"backend": self.name, "error": message}
 
-    def _base_path(self) -> str:
-        return f"/workspaces/{self.workspace}/projects/{self.project}"
-
     def _request(self, method: str, endpoint: str, body: Optional[dict] = None) -> dict:
-        """Perform a REST call against the Plane API."""
+        """Perform a REST call against Plane via the gateway proxy."""
         try:
             import requests
         except ImportError:
             return self._error("requests library not available")
 
-        url = f"{self.api_url}{self._base_path()}{endpoint}"
+        url = f"{self._gateway_url}/gateway/plane/{endpoint.lstrip('/')}"
         headers = {
-            "X-API-Key": self.api_token,
+            "Authorization": f"Bearer {self._consumer_token}",
             "Content-Type": "application/json",
         }
 

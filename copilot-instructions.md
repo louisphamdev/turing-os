@@ -74,7 +74,6 @@ Role-based skill sets loaded from `skills.sh` on worker startup. Skills determin
 ## Common Tasks
 
 - **Add new tool to worker**: Edit `base-worker/src/tools/tool_registry.py`
-- **Modify intent parsing**: Edit `orchestrator/src/core/intent-parser.ts`
 - **Update Docker scaling**: Edit `docker-compose.yml` or `resource-scaling.md`
 - **Change RBAC permissions**: Edit `orchestrator/src/core/rbac.ts`
 

@@ -18,8 +18,15 @@
  */
 
 import { config } from '../config';
-import { WorkerCommand } from './intent-parser';
 import { natsService, NatsService } from './nats';
+
+// Inline structured command payload — kept here because the upstream
+// intent-parser module has been removed. A future producer (e.g. the PM/PO
+// worker) can pass any command shape; the orchestrator only forwards it.
+interface WorkerCommand {
+  type: string;
+  args: Record<string, any>;
+}
 
 interface MatrixRoom {
   room_id?: string;
@@ -46,8 +53,10 @@ interface PendingQuestion {
 
 // Callback type for command handling
 type CommandHandler = (command: string, args: string[], roomId: string, sender: string) => Promise<void>;
-// Callback type for plain message handling (admin → worker)
-type MessageHandler = (roomId: string, sender: string, content: string) => Promise<void>;
+// Callback type for plain message handling (admin → worker).
+// eventId is the Matrix event_id of the original message; downstream code
+// can use it for audit, dedup, or to ack the original event.
+type MessageHandler = (roomId: string, sender: string, content: string, eventId: string) => Promise<void>;
 
 export class MatrixService {
   private baseUrl: string;
@@ -611,28 +620,14 @@ export class MatrixService {
       return;
     }
 
-    // Check if this is the bot room → LLM-powered conversation
-    if (this.isBotRoom(roomId)) {
-      // Commands still go to commandHandler; non-commands go to messageHandler
-      if (this.messageHandler) {
-        await this.messageHandler(roomId, sender, content);
-      }
+    // All other messages are handed to the message handler, which enforces
+    // the admin-only-chats-with-PM/PO policy. The handler decides whether
+    // to push the message into the worker's inbox or to redirect.
+    if (this.messageHandler) {
+      await this.messageHandler(roomId, sender, content, eventId);
       return;
     }
 
-    // Check if this message is in a worker's room
-    const ticketId = this.roomToWorker.get(roomId);
-    if (ticketId) {
-      // Admin sent a message to a worker's room — queue it for the worker
-      this.pushToWorkerInbox(ticketId, sender, content, eventId);
-
-      if (this.messageHandler) {
-        await this.messageHandler(roomId, sender, content);
-      }
-      return;
-    }
-
-    // Message in an unknown room — just log it
     console.log(`[Matrix] Unrouted message in room ${roomId} from ${sender}`);
   }
 
@@ -757,25 +752,6 @@ export class MatrixService {
     };
   }
 
-  // ─── Bot Room (Orchestrator Agent chat) ─────────────────────────────────
-
-  /**
-   * Register the bot's own room for LLM-powered conversations.
-   * Messages in this room go to the OrchestratorAgent instead of worker routing.
-   */
-  registerBotRoom(roomId: string): void {
-    this._botRoomId = roomId;
-    console.log(`[Matrix] Registered bot room: ${roomId}`);
-  }
-
-  /**
-   * Check if a room is the bot room
-   */
-  isBotRoom(roomId: string): boolean {
-    return this._botRoomId === roomId;
-  }
-
-  private _botRoomId: string | null = null;
 }
 
 // Singleton instance

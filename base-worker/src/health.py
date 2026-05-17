@@ -18,7 +18,7 @@ from typing import Optional
 # ─── Configuration ──────────────────────────────────────────────────────────
 HEARTBEAT_INTERVAL = 120  # seconds (2 minutes)
 HEARTBEAT_URL = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrator:3001')
-HEARTBEAT_ENDPOINT = f"{HEARTBEAT_URL}/webhooks/heartbeat"
+HEARTBEAT_ENDPOINT = f"{HEARTBEAT_URL}/webhooks/health/heartbeat"
 
 TICKET_ID = os.environ.get('TICKET_ID', '')
 ROLE = os.environ.get('ROLE', 'default')
@@ -129,9 +129,11 @@ class WorkerHealth:
             pass
 
         try:
+            from orchestrator_auth import orchestrator_headers
             resp = requests.post(
                 HEARTBEAT_ENDPOINT,
                 json=payload,
+                headers=orchestrator_headers(),
                 timeout=10,
             )
             if resp.status_code == 200:

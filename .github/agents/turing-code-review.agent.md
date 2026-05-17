@@ -1,6 +1,6 @@
 ---
 name: turing-code-review
-description: '**SUBAGENT** — Code review specialist for Project Turing OS. Use for: reviewing TypeScript/Python code changes, checking test coverage, validating RBAC implementations, reviewing intent parser logic, catching security issues, or ensuring code follows project conventions. Returns structured review feedback with severity ratings.'
+description: '**SUBAGENT** — Code review specialist for Project Turing OS. Use for: reviewing TypeScript/Python code changes, checking test coverage, validating RBAC implementations, auditing Matrix relay logic, catching security issues, or ensuring code follows project conventions. Returns structured review feedback with severity ratings.'
 version: 1.0.0
 mode: readonly
 tools:
@@ -108,7 +108,7 @@ Project Turing OS is a multi-agent system with:
 ## Special Focus Areas
 
 ### TypeScript (Orchestrator)
-- `intent-parser.ts` — Intent extraction logic
+- `matrix.ts` + `index.ts` Matrix relay handler — admin↔PM/PO routing
 - `rbac.ts` — Permission enforcement
 - `docker.ts` — Container lifecycle
 

@@ -94,7 +94,6 @@ max_age=72h), `TURING_AUDIT` (retention=limits, max_age=30d).
 | `orchestrator/src/core/matrix.ts` | Split: keep `MatrixService` for HITL only (admin DM + worker-room mirror). Move all worker↔worker traffic out. |
 | `orchestrator/src/core/gateway/matrix-proxy.ts` | Becomes admin-only; rate-limit drops to "matrix DM only". |
 | `orchestrator/src/core/nats.ts` (new) | `NatsService` wrapping `nats.connect`, `JetStreamManager`, publish/subscribe helpers, reconnect loop. |
-| `orchestrator/src/core/orchestrator-agent.ts` | Replace direct `matrix.sendDM` for worker traffic with `nats.publish`. Keep DM for human admin. |
 | `orchestrator/src/core/priority-queue.ts` | Source of `turing.pm.inbox` consumer. |
 | `orchestrator/src/core/registry.ts` | Subscribe to `turing.worker.*.heartbeat`; expose `lastHeartbeat` from NATS. |
 | `orchestrator/src/core/health-monitor.ts` | Heartbeat freshness now derived from NATS stream; remove Matrix-based heartbeat lookup. |

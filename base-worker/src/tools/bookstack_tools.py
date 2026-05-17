@@ -1,42 +1,54 @@
 """
 BookStack Tool Interface
-Functions for reading, searching, and writing documents via BookStack REST API.
+
+Every call routes through the orchestrator gateway proxy
+(`GATEWAY_URL/gateway/bookstack/...`) using the worker's per-spawn
+CONSUMER_TOKEN. Raw BookStack tokens never enter worker containers.
 """
 
 import os
 import requests
 from typing import Optional
 
-BOOKSTACK_URL = os.environ.get('BOOKSTACK_URL', 'http://bookstack:80')
-BOOKSTACK_TOKEN = os.environ.get('BOOKSTACK_TOKEN', '')
+
+def _gateway_target(endpoint: str) -> tuple[str, dict, bool]:
+    gateway_url = os.environ.get('GATEWAY_URL', '').rstrip('/')
+    consumer_token = os.environ.get('CONSUMER_TOKEN', '')
+    if not gateway_url or not consumer_token:
+        raise RuntimeError(
+            'BookStack tools require GATEWAY_URL + CONSUMER_TOKEN. '
+            'Workers must be spawned with gateway mode enabled.'
+        )
+    url = f"{gateway_url}/gateway/bookstack/{endpoint.lstrip('/')}"
+    headers = {
+        'Authorization': f'Bearer {consumer_token}',
+        'Accept': 'application/json',
+    }
+    return url, headers, True
 
 
 def _make_request(method: str, endpoint: str, data: dict = None, params: dict = None) -> dict:
-    """
-    Internal helper for making REST API requests to BookStack.
-    """
-    url = f"{BOOKSTACK_URL}/api/{endpoint.lstrip('/')}"
-    headers = {
-        'Authorization': f'Token {BOOKSTACK_TOKEN}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-    }
+    """Internal helper — gateway proxy only."""
+    try:
+        url, headers, _ = _gateway_target(endpoint)
+    except RuntimeError as exc:
+        return {'error': str(exc)}
 
-    if not BOOKSTACK_TOKEN:
-        print("[BookStack] WARNING: BOOKSTACK_TOKEN not configured")
-        return {'error': 'BookStack API token not configured'}
+    if method.upper() not in ('GET', 'HEAD') and data is not None:
+        headers['Content-Type'] = 'application/json'
 
     try:
-        if method.upper() == 'GET':
+        upper = method.upper()
+        if upper == 'GET':
             resp = requests.get(url, headers=headers, params=params, timeout=15)
-        elif method.upper() == 'POST':
-            resp = requests.post(url, headers=headers, json=data, timeout=15)
-        elif method.upper() == 'PUT':
-            resp = requests.put(url, headers=headers, json=data, timeout=15)
-        elif method.upper() == 'PATCH':
-            resp = requests.patch(url, headers=headers, json=data, timeout=15)
-        elif method.upper() == 'DELETE':
-            resp = requests.delete(url, headers=headers, timeout=15)
+        elif upper == 'POST':
+            resp = requests.post(url, headers=headers, json=data, params=params, timeout=15)
+        elif upper == 'PUT':
+            resp = requests.put(url, headers=headers, json=data, params=params, timeout=15)
+        elif upper == 'PATCH':
+            resp = requests.patch(url, headers=headers, json=data, params=params, timeout=15)
+        elif upper == 'DELETE':
+            resp = requests.delete(url, headers=headers, params=params, timeout=15)
         else:
             return {'error': f'Unsupported HTTP method: {method}'}
 

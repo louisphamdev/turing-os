@@ -22,7 +22,6 @@ This file registers custom agents for Project Turing OS.
 | `rbac-permissions` | [.github/skills/rbac-permissions/SKILL.md](.github/skills/rbac-permissions/SKILL.md) | RBAC: role permissions, access control |
 | `gateway-proxy` | [.github/skills/gateway-proxy/SKILL.md](.github/skills/gateway-proxy/SKILL.md) | Gateway: vault, consumer tokens, BookStack |
 | `docker-workflow` | [.github/skills/docker-workflow/SKILL.md](.github/skills/docker-workflow/SKILL.md) | Docker: container management, health, scaling |
-| `intent-parser` | [.github/skills/intent-parser/SKILL.md](.github/skills/intent-parser/SKILL.md) | Intent parsing: NL → structured (Vietnamese support) |
 | `testing` | [.github/skills/testing/SKILL.md](.github/skills/testing/SKILL.md) | Testing: Jest, pytest, syntax validation |
 | `taiga-integration` | [.github/skills/taiga-integration/SKILL.md](.github/skills/taiga-integration/SKILL.md) | Taiga: ticket CRUD, webhooks, sprint management |
 | `research-tools` | [.github/skills/research-tools/SKILL.md](.github/skills/research-tools/SKILL.md) | Context7: tech research, documentation fetching |
@@ -48,7 +47,6 @@ This file registers custom agents for Project Turing OS.
 /rbac-permissions               # Role permissions & access
 /gateway-proxy                  # Vault & consumer tokens
 /docker-workflow                # Container management
-/intent-parser                  # Intent parsing
 /testing                        # Testing & validation
 /taiga-integration              # Ticket management
 /research-tools                 # Tech research

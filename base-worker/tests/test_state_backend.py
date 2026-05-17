@@ -36,14 +36,14 @@ def test_taiga_setting_warns_and_falls_back(monkeypatch):
 
 
 def test_plane_backend_missing_config_returns_error(monkeypatch):
-    """When PLANE_* env is unset, every call must surface a structured error."""
-    for var in ("PLANE_API_URL", "PLANE_API_TOKEN", "PLANE_WORKSPACE_SLUG", "PLANE_PROJECT_ID"):
+    """Without gateway env, every call must surface a structured error."""
+    for var in ("GATEWAY_URL", "CONSUMER_TOKEN", "PLANE_API_URL", "PLANE_API_TOKEN", "PLANE_WORKSPACE_SLUG", "PLANE_PROJECT_ID"):
         monkeypatch.delenv(var, raising=False)
     sb = reload_module()
     backend = sb.get_backend()
     result = backend.update_ticket_status("T-1", "DONE", "ok")
     assert result["backend"] == "plane"
-    assert "PLANE_API_URL" in result["error"]
+    assert "GATEWAY_URL" in result["error"] or "CONSUMER_TOKEN" in result["error"]
 
 
 def test_state_backend_is_abstract(monkeypatch):
@@ -53,10 +53,9 @@ def test_state_backend_is_abstract(monkeypatch):
 
 
 def _configure_plane_env(monkeypatch):
-    monkeypatch.setenv("PLANE_API_URL", "http://plane.example/api/v1")
-    monkeypatch.setenv("PLANE_API_TOKEN", "tok-123")
-    monkeypatch.setenv("PLANE_WORKSPACE_SLUG", "turing")
-    monkeypatch.setenv("PLANE_PROJECT_ID", "proj-uuid")
+    """Configure the gateway envs that PlaneBackend now relies on."""
+    monkeypatch.setenv("GATEWAY_URL", "http://orchestrator:3001")
+    monkeypatch.setenv("CONSUMER_TOKEN", "test.jwt.token")
 
 
 def test_plane_update_ticket_resolves_state_and_patches(monkeypatch):

@@ -1,8 +1,9 @@
 import { config } from '../../config';
+import { getAuditStore } from './audit-store';
 
 /**
  * Basic Prompt Injection Filter
- * Scans task descriptions from Taiga for malicious intents before dispatching to workers.
+ * Scans task descriptions from Plane for malicious intents before dispatching to workers.
  */
 
 const SUSPICIOUS_PATTERNS = [
@@ -26,25 +27,40 @@ export interface PromptScanResult {
   reason?: string;
 }
 
-export function scanTaskDescription(description: string): PromptScanResult {
+export function scanTaskDescription(
+  description: string,
+  context: { ticketId?: string; source?: string } = {},
+): PromptScanResult {
   if (!description) return { isSafe: true };
 
   for (const pattern of SUSPICIOUS_PATTERNS) {
     if (pattern.test(description)) {
+      const reason = `Matched suspicious pattern: ${pattern.toString()}`;
       console.warn(`[Security] Prompt injection detected matching pattern: ${pattern}`);
-      return {
-        isSafe: false,
-        reason: `Matched suspicious pattern: ${pattern.toString()}`,
-      };
+      // Best-effort — fire and forget so the request path stays sync.
+      getAuditStore()
+        .record('prompt-filter', {
+          ticketId: context.ticketId,
+          source: context.source || 'plane',
+          reason,
+          excerpt: description.slice(0, 200),
+        })
+        .catch(() => undefined);
+      return { isSafe: false, reason };
     }
   }
 
-  // Length heuristic
   if (description.length > 10000) {
-    return {
-      isSafe: false,
-      reason: 'Payload too large (>10000 chars)',
-    };
+    const reason = 'Payload too large (>10000 chars)';
+    getAuditStore()
+      .record('prompt-filter', {
+        ticketId: context.ticketId,
+        source: context.source || 'plane',
+        reason,
+        length: description.length,
+      })
+      .catch(() => undefined);
+    return { isSafe: false, reason };
   }
 
   return { isSafe: true };

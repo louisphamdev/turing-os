@@ -19,36 +19,37 @@ import requests
 from datetime import datetime
 from typing import Optional, Callable, Any
 
-BOOKSTACK_URL = os.environ.get('BOOKSTACK_URL', 'http://bookstack:80')
-BOOKSTACK_TOKEN = os.environ.get('BOOKSTACK_TOKEN', '')
-
-# ─── BookStack Tool Storage ────────────────────────────────────────────────────
+# ─── BookStack Tool Storage (gateway-only) ─────────────────────────────────
 
 TOOLS_BOOK_NAME = 'Turing OS Tools'
 TOOLS_SHELF_NAME = 'Turing OS'
 
 
 def _bs_request(method: str, endpoint: str, data: dict = None, params: dict = None) -> dict:
-    """Make REST request to BookStack API"""
-    url = f"{BOOKSTACK_URL}/api/{endpoint.lstrip('/')}"
+    """Make REST request to BookStack — gateway-only path."""
+    gateway_url = os.environ.get('GATEWAY_URL', '').rstrip('/')
+    consumer_token = os.environ.get('CONSUMER_TOKEN', '')
+    if not gateway_url or not consumer_token:
+        return {'error': 'Gateway not configured (GATEWAY_URL + CONSUMER_TOKEN required)'}
+
+    url = f"{gateway_url}/gateway/bookstack/{endpoint.lstrip('/')}"
     headers = {
-        'Authorization': f'Token {BOOKSTACK_TOKEN}',
-        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {consumer_token}',
         'Accept': 'application/json',
     }
-
-    if not BOOKSTACK_TOKEN:
-        return {'error': 'BOOKSTACK_TOKEN not configured'}
+    if method.upper() not in ('GET', 'HEAD') and data is not None:
+        headers['Content-Type'] = 'application/json'
 
     try:
-        if method.upper() == 'GET':
+        upper = method.upper()
+        if upper == 'GET':
             resp = requests.get(url, headers=headers, params=params, timeout=15)
-        elif method.upper() == 'POST':
-            resp = requests.post(url, headers=headers, json=data, timeout=15)
-        elif method.upper() == 'PUT':
-            resp = requests.put(url, headers=headers, json=data, timeout=15)
-        elif method.upper() == 'DELETE':
-            resp = requests.delete(url, headers=headers, timeout=15)
+        elif upper == 'POST':
+            resp = requests.post(url, headers=headers, json=data, params=params, timeout=15)
+        elif upper == 'PUT':
+            resp = requests.put(url, headers=headers, json=data, params=params, timeout=15)
+        elif upper == 'DELETE':
+            resp = requests.delete(url, headers=headers, params=params, timeout=15)
         else:
             return {'error': f'Unsupported HTTP method: {method}'}
 
@@ -142,10 +143,6 @@ def _create_or_update_page(name: str, content: str, book_id: int, chapter_id: in
 
 def list_tools_from_wiki() -> list:
     """List all shared tools stored in BookStack."""
-    if not BOOKSTACK_TOKEN:
-        print("[ToolRegistry] WARNING: BOOKSTACK_TOKEN not configured")
-        return []
-
     book_id, _ = _ensure_shelf_and_book()
     if not book_id:
         return []
@@ -178,9 +175,6 @@ def list_tools_from_wiki() -> list:
 
 def load_tool_from_wiki(tool_name: str) -> Optional[dict]:
     """Load a single tool definition by name."""
-    if not BOOKSTACK_TOKEN:
-        return None
-
     book_id, _ = _ensure_shelf_and_book()
     if not book_id:
         return None
@@ -209,9 +203,6 @@ def save_tool_to_wiki(
     parameters: dict = None,
 ) -> dict:
     """Save a tool definition to BookStack."""
-    if not BOOKSTACK_TOKEN:
-        return {'success': False, 'message': 'BOOKSTACK_TOKEN not configured'}
-
     book_id, _ = _ensure_shelf_and_book()
     if not book_id:
         return {'success': False, 'message': 'Could not create/find tools book'}
@@ -238,9 +229,6 @@ def save_tool_to_wiki(
 
 def delete_tool_from_wiki(tool_name: str) -> dict:
     """Delete a tool from BookStack."""
-    if not BOOKSTACK_TOKEN:
-        return {'success': False, 'message': 'BOOKSTACK_TOKEN not configured'}
-
     book_id, _ = _ensure_shelf_and_book()
     if not book_id:
         return {'success': False, 'message': 'Could not find tools book'}

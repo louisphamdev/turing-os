@@ -288,3 +288,12 @@ export function getRBACService(): RBACService {
   }
   return rbacServiceInstance;
 }
+
+/**
+ * Map an HTTP method to the RBAC action it requires.
+ * Safe methods are 'read'; mutations are 'write'.
+ */
+export function methodToAction(method: string): 'read' | 'write' {
+  const upper = method.toUpperCase();
+  return upper === 'GET' || upper === 'HEAD' || upper === 'OPTIONS' ? 'read' : 'write';
+}

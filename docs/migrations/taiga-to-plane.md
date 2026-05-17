@@ -108,7 +108,6 @@ adds nothing extra — it only proxies the same set.
 | `orchestrator/src/core/gateway/proxy-handler.ts` | Service union `'taiga'` → `'plane'`. |
 | `orchestrator/src/core/credential-vault.ts` | `type: 'taiga'` → `type: 'plane'`; env mapping `TAIGA_API_KEY` → `PLANE_API_TOKEN`. |
 | `orchestrator/src/core/rbac.ts`, `consumer-token.ts`, `audit-logger.ts` | Service-union rename across permissions. |
-| `orchestrator/src/core/orchestrator-agent.ts` | If it references Taiga for backfill, route to Plane. |
 | `taiga-gateway/` | Delete. Plane has its own auth-aware API. |
 | `taiga-docker-entrypoint.sh`, `taiga.env` | Delete. |
 | `init-admin-users.{sh,ps1}` | Rewrite the Taiga section to bootstrap a Plane workspace + project + API token. |

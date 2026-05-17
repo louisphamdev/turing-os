@@ -7,7 +7,7 @@
 
 import { Request, Response } from 'express';
 import { getConsumerTokenManager, TokenValidationResult } from '../consumer-token';
-import { getRBACService } from '../rbac';
+import { getRBACService, methodToAction } from '../rbac';
 import { getCredentialVault, DecryptedCredential } from '../credential-vault';
 import { AuditLogger, AuditEntry } from './audit-logger';
 import { RateLimiter } from './rate-limiter';
@@ -101,10 +101,25 @@ export class ProxyHandler {
       return;
     }
 
-    // Check service access permission
+    // Check service access permission.
     if (!this.rbac.canAccessService(validation.payload.role, service)) {
       res.status(403).json({ error: `Access denied for service: ${service}` });
       return;
+    }
+
+    // Enforce method-level action for non-LLM services. LLM semantics don't
+    // map cleanly to read/write (a POST to /chat/completions is conceptually
+    // "read a completion"), so service-level access is the strongest check
+    // applied there. For plane/bookstack/matrix/github, GET/HEAD requires
+    // `<service>:read` and mutations require `<service>:write`.
+    if (service !== 'llm') {
+      const action = methodToAction(method);
+      if (!this.rbac.canPerformAction(validation.payload.role, service, action)) {
+        res.status(403).json({
+          error: `Access denied: role '${validation.payload.role}' lacks ${service}:${action} permission`,
+        });
+        return;
+      }
     }
 
     // Route to appropriate proxy
@@ -126,7 +141,13 @@ export class ProxyHandler {
           );
           break;
         case 'bookstack':
-          result = await this.bookstackProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
+          result = await this.bookstackProxy.proxy(
+            validation.payload,
+            endpoint,
+            method,
+            req.body,
+            req.query as Record<string, any>,
+          );
           break;
         case 'matrix':
           result = await this.matrixProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);

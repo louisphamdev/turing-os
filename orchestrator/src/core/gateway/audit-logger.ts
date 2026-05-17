@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { Role, Permission } from '../rbac';
+import { getAuditStore } from '../security/audit-store';
 
 export interface AuditEntry {
   id: string;
@@ -104,9 +105,25 @@ export class AuditLogger {
       requestBody: this.sanitizeBody(entry.requestBody),
       responseBody: this.truncateResponse(entry.responseBody),
     };
-    
+
     this.buffer.push(fullEntry);
-    
+
+    // Mirror to Redis so audit history survives orchestrator restarts and
+    // can be queried via /webhooks/audit/gateway.
+    getAuditStore()
+      .record('gateway', {
+        id: fullEntry.id,
+        workerId: fullEntry.workerId,
+        role: fullEntry.role,
+        tokenId: fullEntry.tokenId,
+        service: fullEntry.service,
+        method: fullEntry.method,
+        responseStatus: fullEntry.responseStatus,
+        duration: fullEntry.duration,
+        error: fullEntry.error,
+      })
+      .catch(() => undefined);
+
     // Log to console in development
     if (process.env.NODE_ENV !== 'production') {
       console.log(`[AUDIT] ${fullEntry.service.toUpperCase()} ${fullEntry.method} - ${fullEntry.workerId} (${fullEntry.role}) - ${fullEntry.duration}ms`);

@@ -3,6 +3,30 @@ import { config } from '../config';
 
 export type Priority = 'P0' | 'P1' | 'P2' | 'P3';
 
+const PLANE_TO_PRIORITY: Record<string, Priority> = {
+  urgent: 'P0',
+  high: 'P1',
+  medium: 'P2',
+  low: 'P3',
+  none: 'P3',
+};
+
+/**
+ * Normalise an incoming priority value to the Turing scale.
+ * Accepts:
+ *   - Already-Turing slugs (P0/P1/P2/P3, case-insensitive)
+ *   - Plane priority slugs (urgent / high / medium / low / none)
+ *   - Anything else falls back to P2 so a malformed payload still queues.
+ */
+export function normalizePriority(raw: unknown): Priority {
+  if (typeof raw !== 'string' || raw.trim() === '') return 'P2';
+  const upper = raw.toUpperCase();
+  if (upper === 'P0' || upper === 'P1' || upper === 'P2' || upper === 'P3') {
+    return upper as Priority;
+  }
+  return PLANE_TO_PRIORITY[raw.toLowerCase()] || 'P2';
+}
+
 export interface QueuedTask {
   ticketId: string;
   role: string;

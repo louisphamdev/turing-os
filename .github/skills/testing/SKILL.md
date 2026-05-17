@@ -24,7 +24,7 @@ Set-Location orchestrator
 npm test
 
 # Run specific test file
-npm test -- intent-parser.test.ts
+npm test -- priority-queue.test.ts
 
 # Run with coverage
 npm test -- --coverage
@@ -37,7 +37,6 @@ npm test -- --watch
 
 ```
 orchestrator/tests/
-├── intent-parser.test.ts
 ├── priority-queue.test.ts
 ├── rbac.test.ts
 └── registry.test.ts

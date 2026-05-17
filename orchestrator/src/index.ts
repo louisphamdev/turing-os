@@ -1,6 +1,6 @@
-import * as crypto from 'crypto';
 import express from 'express';
 import { webhooksRouter } from './api/webhooks';
+import { makeRequireAdmin } from './api/middleware';
 import { DockerService } from './core/docker';
 import { WorkerRegistry } from './core/registry';
 import { HealthMonitor } from './core/health-monitor';
@@ -9,8 +9,6 @@ import { config, logConfigSummary } from './config';
 import { initAgentRoles, getAllAgentRoles } from './agents/init';
 import { matrixService } from './core/matrix';
 import { priorityQueue } from './core/priority-queue';
-import { parseIntent, isWorkerDirectedMessage, WorkerCommand } from './core/intent-parser';
-import { OrchestratorAgent } from './core/orchestrator-agent';
 import { getProxyHandler } from './core/gateway/proxy-handler';
 import { getCredentialVault } from './core/credential-vault';
 import { getConsumerTokenManager } from './core/consumer-token';
@@ -24,6 +22,19 @@ console.log('╔═════════════════════�
 console.log('║        TURING OS — Orchestrator v1.0         ║');
 console.log('╚══════════════════════════════════════════════╝');
 console.log('');
+
+// Fail-closed: gateway mode is mandatory now, and it requires JWT signing
+// + vault encryption keys. Refuse to boot without them so the operator
+// cannot silently revert to direct-key mode.
+const REQUIRED_SECRETS = ['JWT_SECRET', 'VAULT_MASTER_KEY'];
+const missingSecrets = REQUIRED_SECRETS.filter((k) => !process.env[k] || process.env[k]!.length < 32);
+if (missingSecrets.length > 0) {
+  console.error(
+    `[Orchestrator] FATAL: missing or too-short secrets: ${missingSecrets.join(', ')}. ` +
+      'Set them (>=32 chars) in .env before starting.',
+  );
+  process.exit(1);
+}
 
 logConfigSummary();
 initAgentRoles();
@@ -41,37 +52,57 @@ if (savedPM && pmStateManager.isStateStale()) {
   console.warn(`[PMFailover] Detected stale PM state (ticket: ${savedPM.ticketId}). Queue will be restored on next PM spawn.`);
 }
 
-// ─── Matrix Message Handler — all messages go to LLM (OrchestratorAgent) ─────
+// ─── Matrix Message Handler — pure relay to PM / PO inbox ──────────────────
+//
+// Architecture rule: admin chats ONLY with PM and PO via their per-worker
+// Matrix room. Orchestrator is a transport, not a chatbot. Messages in any
+// other worker room (SE, QA, Doctor, HR, ...) are politely redirected so
+// the PO → PM → HR → Workers hierarchy stays the path of authority.
 
-/**
- * ALL admin messages are handled by the LLM-powered OrchestratorAgent.
- * Slash commands like /status, /scale are parsed naturally by the LLM.
- * Worker room messages are forwarded to the LLM for routing.
- */
+const CHATTABLE_ROLES = new Set(['pm', 'po']);
+
 async function handleMatrixMessage(
   roomId: string,
   sender: string,
-  content: string
+  content: string,
+  eventId: string
 ): Promise<void> {
-  // All messages go to the LLM-powered OrchestratorAgent
-  // (MatrixService already filters own messages in _handleRoomEvent)
-  await handleBotMessage(roomId, sender, content);
+  const ticketId = matrixService.getWorkerByRoom(roomId);
+  if (!ticketId) {
+    // Orphan room with no worker mapping — ignore.
+    return;
+  }
+
+  const worker = registry.lookupByTicket(ticketId);
+  const role = (worker?.role || '').toLowerCase();
+
+  if (CHATTABLE_ROLES.has(role)) {
+    // Relay verbatim to the worker's HTTP inbox; the PM/PO container polls
+    // it and produces the reply via its own LLM agent.
+    matrixService.pushToWorkerInbox(ticketId, sender, content, eventId);
+    console.log(`[MatrixRelay] ${sender} → ${role}(${ticketId}): ${content.substring(0, 80)}`);
+    return;
+  }
+
+  // Non-PM/PO room: redirect. Do NOT push to the worker's inbox so the
+  // hierarchy is enforced (admin → PM → workers).
+  const target = registry.listActive().find((w) => w.role === 'pm');
+  const pmRoomId = target ? matrixService.getWorkerRoomId(target.ticketId) : null;
+  const pmHint = pmRoomId
+    ? `Vào PM room \`${pmRoomId}\` (ticket \`${target!.ticketId}\`) để gửi yêu cầu.`
+    : target
+      ? `PM đang chạy (ticket \`${target.ticketId}\`) nhưng chưa có Matrix room — chờ vài giây rồi thử lại.`
+      : 'PM chưa chạy, kiểm tra orchestrator logs.';
+  await matrixService.sendToRoom(
+    roomId,
+    `🚫 Theo kiến trúc Turing OS, admin chỉ chat trực tiếp với **PO** hoặc **PM**. ` +
+      `Worker \`${ticketId}\` (role: ${role || 'unknown'}) không nhận chat trực tiếp.\n` +
+      pmHint
+  );
+  console.log(`[MatrixRelay] ${sender} sent to non-chattable room ${roomId} (role: ${role}); redirected to PM`);
 }
 
 matrixService.setMessageHandler(handleMatrixMessage);
-
-const orchestratorAgent = new OrchestratorAgent(docker, healthMonitor, registry);
-
-async function handleBotMessage(roomId: string, sender: string, content: string): Promise<void> {
-  console.log(`[OrchestratorAgent] ${sender}: ${content.substring(0, 80)}`);
-  try {
-    const reply = await orchestratorAgent.think(content, sender, roomId);
-    await matrixService.sendToRoom(roomId, reply);
-  } catch (err) {
-    console.error('[OrchestratorAgent] Error:', err);
-    await matrixService.sendToRoom(roomId, `⚠️ Agent error: ${err}`);
-  }
-}
 
 const autoStartRoles = config.orchestrator.autoStartRoles;
 if (autoStartRoles.length > 0) {
@@ -182,21 +213,9 @@ if (autoStartRoles.length > 0) {
     matrixService.startListening().catch((err) => {
       console.error('[Orchestrator] Failed to start Matrix listener:', err);
     });
-    setTimeout(async () => {
-      try {
-        const botRoom = await matrixService.createWorkerRoom('orchestrator', 'bot');
-        if (botRoom) {
-          matrixService.registerBotRoom(botRoom);
-          await matrixService.sendToRoom(botRoom,
-            '🤖 **Turing OS Orchestrator Agent**\n\n' +
-            'Hello! I\'m your orchestrator agent. Ask me anything about the system — ' +
-            'workers, scale, config, health, or anything else.\n\n' +
-            'Try: "how many workers are running?" or "show runtime config"');
-        }
-      } catch (err) {
-        console.error('[Orchestrator] Failed to create bot room:', err);
-      }
-    }, 5000);
+    // No bot room: per architecture, admin chats with PM/PO worker rooms,
+    // not with the orchestrator. The PO/PM rooms get created automatically
+    // when their worker spawns (auto-start).
   }, 2000);
 }
 
@@ -210,34 +229,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-const ADMIN_API_TOKEN = process.env.ADMIN_API_TOKEN || '';
-if (!ADMIN_API_TOKEN) {
-  console.warn('[Orchestrator] ADMIN_API_TOKEN is not set. Admin-only endpoints will refuse every request.');
-}
-
-function requireAdmin(req: express.Request, res: express.Response, next: express.NextFunction): void {
-  if (!ADMIN_API_TOKEN) {
-    res.status(503).json({ error: 'ADMIN_API_TOKEN not configured on this orchestrator' });
-    return;
-  }
-  const header = req.get('authorization') || '';
-  const provided = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!provided || provided.length !== ADMIN_API_TOKEN.length) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  try {
-    const ok = crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(ADMIN_API_TOKEN));
-    if (!ok) {
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
-    }
-  } catch {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
-  next();
-}
+const requireAdmin = makeRequireAdmin();
 
 app.get('/health', async (_req, res) => {
   const workers = registry.listActive();
@@ -275,10 +267,12 @@ app.get('/health', async (_req, res) => {
   });
 });
 
-if (process.env.GATEWAY_ENABLED !== 'false') {
+// Gateway is mandatory. The legacy `GATEWAY_ENABLED=false` mode has been
+// removed — workers never receive raw API keys, and every external call
+// must traverse the proxy with a consumer token.
+{
   const proxyHandler = getProxyHandler();
   app.all('/gateway/llm/*', async (req, res) => {
-    req.url = req.url.replace('/gateway/llm', '/gateway/llm');
     await proxyHandler.handleRequest(req, res);
   });
   app.all('/gateway/plane/*', async (req, res) => {
@@ -320,17 +314,12 @@ if (process.env.GATEWAY_ENABLED !== 'false') {
   app.post('/gateway/credentials/rotate/:id', requireAdmin, async (_req, res) => {
     res.status(501).json({ error: 'Auto-rotation not implemented yet' });
   });
-  app.get('/gateway/audit/stats', requireAdmin, async (req, res) => {
+  app.get('/gateway/audit/stats', requireAdmin, async (_req, res) => {
     const { AuditLogger } = await import('./core/gateway/audit-logger');
     const stats = await AuditLogger.getInstance().getStats();
     res.json(stats);
   });
-  console.log('[Orchestrator] ✓ Gateway proxy enabled (GATEWAY_ENABLED=true)');
-} else {
-  app.get('/gateway/health', (_req, res) => {
-    res.json({ status: 'disabled', gatewayEnabled: false });
-  });
-  console.log('[Orchestrator] Gateway proxy disabled (GATEWAY_ENABLED=false)');
+  console.log('[Orchestrator] ✓ Gateway proxy enabled (mandatory mode)');
 }
 
 app.use('/webhooks', webhooksRouter(registry, docker, healthMonitor));
