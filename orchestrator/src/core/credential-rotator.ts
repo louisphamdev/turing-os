@@ -45,8 +45,8 @@ const PROVIDER_ROTATION_ENDPOINTS: Record<string, {
   'generic': {
     requiresNewKey: true,
   },
-  'taiga': {
-    requiresNewKey: false,   // May support API-based rotation
+  'plane': {
+    requiresNewKey: false,
   },
   'bookstack': {
     requiresNewKey: false,

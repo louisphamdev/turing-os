@@ -1,4 +1,4 @@
-.PHONY: help install bootstrap build up down logs ps restart clean doctor test test-quick quickstart status update uninstall replay
+.PHONY: help bootstrap build up down logs ps restart clean doctor test test-quick quickstart status update replay
 
 # Turing OS Makefile
 # Usage: make [target]
@@ -21,9 +21,8 @@ help:
 	@echo ""
 	@echo -e "$(YELLOW)Usage:$(NC) make [target]"
 	@echo ""
-	@echo -e "$(GREEN)Installation:$(NC)"
-	@echo "  install         Run the interactive installer"
-	@echo "  bootstrap       Create Taiga + Matrix users/tokens"
+	@echo -e "$(GREEN)Setup:$(NC)"
+	@echo "  bootstrap       Create Matrix admin/bot users + tokens"
 	@echo "  build           Build Docker images"
 	@echo "  up              Start all services"
 	@echo ""
@@ -33,7 +32,6 @@ help:
 	@echo "  logs            View logs (Ctrl+C to exit)"
 	@echo "  ps              Show running containers"
 	@echo "  status          Show service status"
-	@echo "  doctor          Run post-install connection checks"
 	@echo ""
 	@echo -e "$(GREEN)Development:$(NC)"
 	@echo "  test            Run Docker smoke checks"
@@ -43,7 +41,6 @@ help:
 	@echo -e "$(GREEN)Utilities:$(NC)"
 	@echo "  quickstart      Show quick start guide"
 	@echo "  update          Pull latest changes"
-	@echo "  uninstall       Remove Turing OS"
 	@echo ""
 	@echo -e "$(YELLOW)Examples:$(NC)"
 	@echo "  make up              # Start services"
@@ -52,15 +49,7 @@ help:
 	@echo "  make clean           # Full cleanup"
 	@echo ""
 
-## install - Run interactive installer
-install:
-	@if [ "$(OS)" = "Windows_NT" ]; then \
-		powershell -ExecutionPolicy Bypass -File .\install\install.ps1; \
-	else \
-		bash ./install/install.sh; \
-	fi
-
-## bootstrap - Create Taiga + Matrix users/tokens
+## bootstrap - Create Matrix users/tokens
 bootstrap:
 	@if [ "$(OS)" = "Windows_NT" ]; then \
 		powershell -ExecutionPolicy Bypass -File .\init-admin-users.ps1; \
@@ -110,19 +99,11 @@ status:
 	@docker compose ps
 	@echo ""
 	@echo -e "$(YELLOW)Access URLs:$(NC)"
-	@echo "  Taiga:      http://localhost:9000"
+	@echo "  Plane:        http://localhost:9000"
 	@echo "  BookStack:    http://localhost:6875"
-	@echo "  Matrix:     http://localhost:8008"
-	@echo "  Element:    http://localhost:8080"
+	@echo "  Matrix:       http://localhost:8008"
+	@echo "  Element:      http://localhost:8080"
 	@echo "  Orchestrator: http://localhost:3001/health"
-
-## doctor - Run post-install connection checks
-doctor:
-	@if [ "$(OS)" = "Windows_NT" ]; then \
-		powershell -ExecutionPolicy Bypass -File .\install\config.ps1 -Service test; \
-	else \
-		bash ./install/config.sh test; \
-	fi
 
 ## clean - Remove containers and volumes
 clean:
@@ -154,14 +135,15 @@ quickstart:
 	@echo -e "$(BLUE)║           Turing OS Quick Start Guide                ║$(NC)"
 	@echo -e "$(BLUE)╚══════════════════════════════════════════════════════╝$(NC)"
 	@echo ""
-	@echo -e "$(YELLOW)1. Create your first ticket in Taiga:$(NC)"
+	@echo -e "$(YELLOW)1. Create your first ticket in Plane:$(NC)"
 	@echo "   - Go to http://localhost:9000"
-	@echo "   - Create ticket with: Status=TODO, Priority=P1"
+	@echo "   - Finish onboarding (workspace + project + API token)"
+	@echo "   - Paste the API token into PLANE_API_TOKEN in .env, then make restart"
+	@echo "   - Create an issue with Status=Todo, Priority=P1"
 	@echo "   - Worker will automatically pick it up"
 	@echo ""
 	@echo -e "$(YELLOW)2. Verify the stack:$(NC)"
-	@echo "   - Run: make doctor"
-	@echo "   - Or open: http://localhost:3001/health"
+	@echo "   - Run: curl http://localhost:3001/health"
 	@echo ""
 	@echo -e "$(YELLOW)3. Open Element and talk to workers:$(NC)"
 	@echo "   - Go to http://localhost:8080"
@@ -180,19 +162,6 @@ update:
 	docker compose pull
 	docker compose up -d
 	@echo -e "$(GREEN)[UPDATE] Done!$(NC)"
-
-## uninstall - Remove Turing OS
-uninstall:
-	@echo -e "$(YELLOW)[UNINSTALL] Removing Turing OS...$(NC)"
-	@read -p "This will remove ALL data. Continue? (y/N): " confirm; \
-	if [ "$$confirm" = "y" ]; then \
-		docker compose down -v --remove-orphans; \
-		docker rmi turing-worker-base:latest turing-orchestrator:latest 2>/dev/null || true; \
-		rm -rf ~/.turing-os; \
-		echo -e "$(GREEN)[UNINSTALL] Done!$(NC)"; \
-	else \
-		echo "Cancelled."; \
-	fi
 
 ## replay - Replay a task (for debugging)
 replay:

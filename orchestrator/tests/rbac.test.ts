@@ -49,18 +49,18 @@ describe('RBAC', () => {
     }
   });
 
-  it('should give pm full taiga access', () => {
+  it('should give pm full plane access', () => {
     const perms = ROLE_PERMISSIONS['pm'];
-    expect(hasPermission(perms, 'taiga:read')).toBe(true);
-    expect(hasPermission(perms, 'taiga:write')).toBe(true);
-    expect(hasPermission(perms, 'taiga:create-task')).toBe(true);
-    expect(perms).toContain('taiga:*');
+    expect(hasPermission(perms, 'plane:read')).toBe(true);
+    expect(hasPermission(perms, 'plane:write')).toBe(true);
+    expect(hasPermission(perms, 'plane:create-task')).toBe(true);
+    expect(perms).toContain('plane:*');
   });
 
   it('should give security full access to all systems', () => {
     const perms = ROLE_PERMISSIONS['security'];
-    expect(perms).toContain('taiga:*');
-    expect(perms).toContain('wiki:*');
+    expect(perms).toContain('plane:*');
+    expect(perms).toContain('bookstack:*');
     expect(perms).toContain('github:*');
     expect(perms).toContain('matrix:*');
   });
@@ -104,10 +104,8 @@ describe('RBAC', () => {
   it('should have valid permission format for all role permissions', () => {
     const validPermissionPatterns = [
       /^llm:(read|write|\*)$/,
-      /^taiga:(read|write|create-task|\*)$/,
       /^plane:(read|write|create-task|\*)$/,
       /^bookstack:(read|write|\*)$/,
-      /^wiki:(read|write|\*)$/,
       /^matrix:(read|write|\*)$/,
       /^github:(read|write|repo|\*)$/,
     ];

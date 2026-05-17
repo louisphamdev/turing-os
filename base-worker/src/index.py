@@ -328,7 +328,7 @@ def main():
 You are chatting with a user (admin) via Matrix. Be conversational and helpful.
 When the user asks you to do something, use tools to accomplish the task.
 Always respond in a friendly manner.
-You have access to Taiga/Plane (tickets), BookStack (documentation), and terminal commands."""
+You have access to Plane (tickets), BookStack (documentation), and terminal commands."""
 
             # ── Optional NATS subscriber (Phase 2 dual-read) ────────────────
             # When WORKER_NATS_SUBSCRIBE=true and nats-py is available, the

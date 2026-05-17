@@ -36,7 +36,7 @@
 
 ### Available Tools
 - `execute_terminal_command` - Network diagnostics, config testing
-- `read_ticket` - Get ticket details from Taiga
+- `read_ticket` - Get ticket details from Plane
 - `update_ticket_status` - Update ticket status
 - `add_comment` - Add network findings to tickets
 
@@ -49,7 +49,7 @@
 
 ## Workflow
 
-1. Receive network ticket via Taiga webhook
+1. Receive network ticket via Plane webhook
 2. Read ticket to understand network requirements
 3. Diagnose and test network connectivity in sandbox
 4. Generate configuration changes or scripts
@@ -124,7 +124,7 @@ When PM is unreachable:
 ```
 1. STOP: Stop accepting new tasks
 2. COMPLETE: Finish current atomic operation
-3. SAVE: Checkpoint to Taiga
+3. SAVE: Checkpoint to Plane
 4. LOG: "PM unreachable, entering safemode"
 5. WAIT: For PM to restore
 ```
@@ -138,7 +138,7 @@ When LLM rate limit is hit:
 4. Auto-resume when rate limit resets
 
 When budget exhausted:
-1. Save all work to Taiga/BookStack
+1. Save all work to Plane/BookStack
 2. Signal BLOCKED with "budget_exhausted" tag
 3. Wait for credit refills
 4. Resume automatically when funded

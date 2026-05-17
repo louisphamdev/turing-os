@@ -5,7 +5,7 @@
 PM is the single point of failure. To prevent system-wide paralysis when PM goes down, the **Doctor Agent** manages PM failover — Doctor already has health monitoring infrastructure, diagnosis tools, and self-healing scripts. PM death is handled by the same Doctor pipeline as worker death, with PM-specific tools and triage categories.
 
 > **Architecture Change from Original Design:**
-> The original design specified a hot-standby PM process that monitors via Taiga heartbeat and takes over after 60s. The implemented architecture uses **Doctor Agent as the failover manager** — no second PM process needed. This reuses existing infrastructure and adds full diagnose→fix→track→report capabilities.
+> The original design specified a hot-standby PM process that monitors via Plane heartbeat and takes over after 60s. The implemented architecture uses **Doctor Agent as the failover manager** — no second PM process needed. This reuses existing infrastructure and adds full diagnose→fix→track→report capabilities.
 
 ---
 
@@ -48,11 +48,11 @@ PM is the single point of failure. To prevent system-wide paralysis when PM goes
 | Aspect | Original (standby PM) | Implemented (Doctor-managed) |
 |--------|------------------------|------------------------------|
 | Extra PM process | 2 containers | 0 extra containers |
-| State storage | Taiga ticket | Local JSON file |
+| State storage | Plane ticket | Local JSON file |
 | Diagnosis on death | None | Full Doctor pipeline |
 | Fix on death | None | restart_pm.ps1 + check_pm_logs.ps1 |
 | Flapping detection | Not specified | 3 deaths / 60 min → stop |
-| Monitoring | Standby → Taiga | HealthMonitor 60s cycle |
+| Monitoring | Standby → Plane | HealthMonitor 60s cycle |
 
 ---
 
@@ -62,7 +62,7 @@ PM is the single point of failure. To prevent system-wide paralysis when PM goes
 
 The `PMStateManager` writes a snapshot to a local JSON file every 30 seconds.
 The file holds enough context for a freshly respawned PM to resume dispatching
-without consulting Taiga first.
+without consulting Plane first.
 
 ```typescript
 // orchestrator/src/core/pm-state.ts — actual shape persisted to disk
@@ -89,7 +89,7 @@ interface PMState {
 
 > Caveat: the file lives on the orchestrator container's filesystem. If the
 > orchestrator itself is recreated, the file is lost and PM has to rebuild
-> queue state from Taiga tickets. Mount a volume on `PM_STATE_PATH` if you
+> queue state from Plane tickets. Mount a volume on `PM_STATE_PATH` if you
 > need PM-failover survival across orchestrator restarts.
 
 ---
@@ -163,6 +163,6 @@ Worker → orchestrator (PM route): 503 PM unavailable
   PM state survives orchestrator container recreation.
 - **State-file integrity:** add a checksum / version field so a corrupted save
   is detected on load rather than parsed into an unusable queue.
-- **Heartbeat to Taiga:** the current model is local-only; mirroring PM state
-  to a Taiga ticket would let an external observer detect PM death.
+- **Heartbeat to Plane:** the current model is local-only; mirroring PM state
+  to a Plane ticket would let an external observer detect PM death.
 

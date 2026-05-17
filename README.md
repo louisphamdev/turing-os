@@ -29,13 +29,13 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 ### 1. Automated Requirements Management
 - **PO (Product Owner)** receives requirements from stakeholders
 - Priority classification (P0-P3)
-- Creates tickets in **Taiga** with automatic workflow
+- Creates tickets in **Plane** with automatic workflow
 
 ### 2. Automated Software Development
 - **Workers** execute tasks using ReAct loop
 - Multi-language support: Python, JavaScript, TypeScript, Go, Rust, .NET, Java
 - Auto research with Context7 for unknown tech
-- Tools: **BookStack** (docs), **Taiga** (tickets), sandbox terminal
+- Tools: **BookStack** (docs), **Plane** (tickets), sandbox terminal
 
 ### 3. Bidirectional Human-in-the-Loop (HITL)
 - **Matrix** enables real-time two-way communication between admin and workers
@@ -93,7 +93,7 @@ Error detected ──► Doctor triages ──► Diagnoses root cause
 |------|-----------|
 | `check_system_health()` | CPU, memory, disk, Docker, network snapshot |
 | `parse_docker_logs()` | Fetch & parse logs from any container (local or via orchestrator relay) |
-| `check_service_connectivity()` | Taiga, Wiki, Matrix, Context7, GitHub, Orchestrator |
+| `check_service_connectivity()` | Plane, Wiki, Matrix, Context7, GitHub, Orchestrator |
 | `check_recent_errors()` | Aggregate ERROR/WARN across ALL containers |
 | `query_known_issues_db()` | Search BookStack for past errors & fixes |
 | `save_to_known_issues()` | Record new learnings to BookStack |
@@ -140,7 +140,7 @@ Doctor (in container) ── GET /containers ──────────► O
 | `restart_service.ps1` | Service unhealthy |
 
 ### 6. Advanced Security & Orchestration Gateway (NEW)
-- **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Taiga, BookStack, Matrix) is routed through the orchestrator.
+- **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Plane, BookStack, Matrix) is routed through the orchestrator.
 - **Credential Vault & Consumer Tokens**: Workers authenticate using short-lived JWT tokens rather than direct API keys.
 - **Role-Based Access Control (RBAC)**: Fine-grained permissions per role (e.g., `software-engineer` can write code, `qa` can only read).
 - **Intent Parser**: LLM-powered module that reliably translates natural language admin commands via Matrix into structured actions.
@@ -273,7 +273,7 @@ ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
 
 | Service | Port | Purpose |
 |---------|------|---------|
-| **Taiga** | 9000 | Ticket management & webhooks |
+| **Plane** | 9000 | Ticket management & webhooks |
 | **BookStack** | 6875 | Documentation & secrets storage |
 | **Matrix (Synapse)** | 8008/8448 | Bidirectional admin ↔ worker communication |
 | **Element Web** | 8080 | Web chat interface for Matrix |
@@ -311,7 +311,7 @@ ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
 ### Event Flow
 
 ```
-1. Stakeholder creates ticket in Taiga
+1. Stakeholder creates ticket in Plane
    ↓
 2. Webhook triggers → Orchestrator
    ↓
@@ -325,7 +325,7 @@ ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
    ↓
 7. Task failed? → Doctor diagnosis → Fix or GitHub Issue
    ↓
-8. Complete → Taiga ticket updated → Retro report
+8. Complete → Plane ticket updated → Retro report
 ```
 
 ---
@@ -364,7 +364,7 @@ docker compose build turing-orchestrator
 # 5. Start services
 docker compose up -d
 
-# 6. Bootstrap Taiga + Matrix accounts
+# 6. Bootstrap Plane + Matrix accounts
 ./init-admin-users.sh
 
 # Windows PowerShell
@@ -384,7 +384,7 @@ curl http://localhost:3001/health
 
 | Service | URL |
 |---------|-----|
-| Taiga (Ticket Management) | http://localhost:9000 |
+| Plane (Ticket Management) | http://localhost:9000 |
 | BookStack (Documentation) | http://localhost:6875 |
 | Element Web (Chat Interface) | http://localhost:8080 |
 | Matrix Synapse (API) | http://localhost:8008 |
@@ -399,7 +399,7 @@ turing-os/
 ├── install/                 # Installers (sh + ps1)
 ├── orchestrator/           # Node.js API gateway & Matrix relay
 │   └── src/
-│       ├── api/webhooks.ts  # Taiga, Matrix & worker-inbox endpoints
+│       ├── api/webhooks.ts  # Plane, Matrix & worker-inbox endpoints
 │       ├── core/
 │       │   ├── matrix.ts   # Bidirectional Matrix communication hub
 │       │   ├── docker.ts   # Worker container management
@@ -410,7 +410,7 @@ turing-os/
 ├── base-worker/            # Python worker
 │   └── src/
 │       ├── agent/          # ReAct loop (Hermes)
-│       └── tools/          # Taiga, BookStack, Matrix, terminal
+│       └── tools/          # Plane, BookStack, Matrix, terminal
 ├── roles/                  # Agent definitions
 │   ├── po.md, pm.md, hr.md
 │   ├── software-engineer.md
@@ -419,7 +419,7 @@ turing-os/
 │   └── doctor-fixes/      # Self-healing PowerShell scripts (Doctor)
 ├── synapse/                # Matrix Synapse config
 ├── element_config/         # Element Web config
-├── taiga-gateway/          # Taiga nginx config
+├── taiga-gateway/          # Plane nginx config
 ├── .github/                # Issue templates
 ├── helm/                   # Kubernetes deployment
 └── docs/                   # Architecture docs
@@ -434,12 +434,12 @@ Tokens are managed separately via config manager:
 ```powershell
 # Windows
 .\install\config.ps1                    # Configure all
-.\install\config.ps1 -Service taiga     # Taiga only
+.\install\config.ps1 -Service taiga     # Plane only
 .\install\config.ps1 -Service test      # Test connections
 
 # macOS/Linux
 ./install/config.sh                     # Configure all
-./install/config.sh taiga               # Taiga only
+./install/config.sh taiga               # Plane only
 ./install/config.sh test                # Test connections
 ```
 
@@ -448,7 +448,7 @@ Services status:
 ╔══════════════════════════════════════╗
 ║     TURING OS SERVICE STATUS          ║
 ╠══════════════════════════════════════╣
-║  Taiga:      ✓ Connected             ║
+║  Plane:      ✓ Connected             ║
 ║  Matrix:     ✓ Connected (sync)      ║
 ║  Element:    ✓ Connected             ║
 ║  BookStack:    ✓ Connected             ║
@@ -475,7 +475,7 @@ Services status:
 2. Bootstrap service users with `./init-admin-users.sh` on macOS/Linux or `.\init-admin-users.ps1` on Windows.
 3. Verify tokens and service connections with `bash install/config.sh test` or `.\install\config.ps1 -Service test`.
 4. Open Element at http://localhost:8080 and sign in with the admin account you configured.
-5. Create a Taiga ticket in `TODO` state, then use `/status` in Element to confirm the orchestrator sees active workers.
+5. Create a Plane ticket in `TODO` state, then use `/status` in Element to confirm the orchestrator sees active workers.
 
 ---
 
@@ -483,7 +483,7 @@ Services status:
 
 | Version | Goals | Status |
 |---------|-------|--------|
-| v1.0 | Core: Taiga + Workers + PM + HR | ✅ Shipped |
+| v1.0 | Core: Plane + Workers + PM + HR | ✅ Shipped |
 | v1.1 | Matrix bidirectional HITL + Worker Health + Flapping Detection | ✅ Shipped |
 | v1.2 | Security Gateway Proxy + RBAC + Auto-scaling + Doctor Agent | ✅ Shipped |
 | v1.3 | Doctor Dynamic Tools + Config Patching + Cross-Worker Invocation | ✅ Shipped |

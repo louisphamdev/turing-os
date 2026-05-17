@@ -8,8 +8,7 @@ Provides tools for PM to:
 - Report project health to admin via Matrix
 
 This implements the PM-side proactive monitoring described in roles/pm.md.
-Ticket queries go through state_backend.get_backend() so the same code runs
-against Taiga or Plane depending on STATE_BACKEND.
+Ticket queries go through state_backend.get_backend() (Plane CE).
 """
 
 import os

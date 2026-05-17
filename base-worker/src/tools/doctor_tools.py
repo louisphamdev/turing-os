@@ -4,7 +4,7 @@ Doctor Agent Tools — Diagnostic and self-healing toolkit for the Doctor worker
 Provides tools for:
 - System health monitoring (CPU, memory, disk, Docker, network)
 - Docker log parsing and error aggregation
-- Service connectivity checks (Taiga, Wiki, Matrix, Context7, GitHub)
+- Service connectivity checks (Plane, Wiki, Matrix, Context7, GitHub)
 - Known issues database (BookStack)
 - GitHub issue creation
 - Self-healing fix scripts execution and verification
@@ -18,8 +18,8 @@ Environment variables:
     BOOKSTACK_URL            — BookStack URL (default: http://wiki:3000)
     BOOKSTACK_TOKEN      — BookStack JWT auth token
     GITHUB_TOKEN        — GitHub API token (fallback; primary token fetched from Wiki /secrets/)
-    TAIGA_API_URL       — Taiga API URL (default: http://taiga-gateway:80/api/v1)
-    TAIGA_API_KEY       — Taiga API key
+    PLANE_API_URL       — Plane API URL (default: http://taiga-gateway:80/api/v1)
+    PLANE_API_TOKEN       — Plane API key
     MATRIX_ROOM_ID      — Matrix room for admin communication
     MATRIX_BOT_TOKEN    — Matrix bot auth token
     SYNAPSE_API_URL     — Synapse homeserver URL (default: http://synapse:8008)
@@ -43,8 +43,8 @@ ORCHESTRATOR_URL = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrato
 BOOKSTACK_URL = os.environ.get('BOOKSTACK_URL', 'http://wiki:3000')
 BOOKSTACK_TOKEN = os.environ.get('BOOKSTACK_TOKEN', '')
 GITHUB_TOKEN_FALLBACK = os.environ.get('GITHUB_TOKEN', '')
-TAIGA_API_URL = os.environ.get('TAIGA_API_URL', 'http://taiga-gateway:80/api/v1')
-TAIGA_API_KEY = os.environ.get('TAIGA_API_KEY', '')
+PLANE_API_URL = os.environ.get('PLANE_API_URL', 'http://taiga-gateway:80/api/v1')
+PLANE_API_TOKEN = os.environ.get('PLANE_API_TOKEN', '')
 MATRIX_ROOM_ID = os.environ.get('MATRIX_ROOM_ID', '')
 MATRIX_BOT_TOKEN = os.environ.get('MATRIX_BOT_TOKEN', '')
 SYNAPSE_API_URL = os.environ.get('SYNAPSE_API_URL', 'http://synapse:8008')
@@ -146,7 +146,7 @@ def check_system_health() -> dict:
 
     # Network connectivity checks — parallel for speed
     services_to_check = {
-        'taiga': f'{TAIGA_API_URL}/health',
+        'taiga': f'{PLANE_API_URL}/health',
         'bookstack': f'{BOOKSTACK_URL}/health',
         'orchestrator': f'{ORCHESTRATOR_URL}/health',
         'synapse': f'{SYNAPSE_API_URL}/_matrix/client/versions',
@@ -302,7 +302,7 @@ def check_service_connectivity(service_name: str) -> dict:
     import requests
 
     service_endpoints = {
-        'taiga': f'{TAIGA_API_URL}/health',
+        'taiga': f'{PLANE_API_URL}/health',
         'bookstack': f'{BOOKSTACK_URL}/health',
         'matrix': f'{SYNAPSE_API_URL}/_matrix/client/versions',
         'context7': 'https://api.context7.com/health',
@@ -1526,7 +1526,7 @@ def report_fix_success(
     Record a successful fix for metrics tracking and notify admin via Matrix.
 
     Args:
-        ticket_id: The Taiga ticket ID associated with the fix
+        ticket_id: The Plane ticket ID associated with the fix
         fix_applied: Description of the fix that was applied
         classification: Category of issue (e.g., "network", "memory", "docker", "PROJECT_BUG", "LLM_BUG")
     Returns:
@@ -1654,7 +1654,7 @@ def report_fix_failure(
     Record a failed fix attempt for metrics tracking and notify admin.
 
     Args:
-        ticket_id: The Taiga ticket ID associated with the failed fix
+        ticket_id: The Plane ticket ID associated with the failed fix
         diagnosis: What was diagnosed as the problem
         reason: Why the fix failed
     Returns:
@@ -2032,7 +2032,7 @@ def _suggest_fixes(error_msg: str, container_name: str = '') -> list[dict]:
     if any(p in msg for p in ('connection refused', 'connect error', 'econnrefused')):
         svc = 'unknown'
         if 'taiga' in msg or 'taiga' in container:
-            svc = 'Taiga'
+            svc = 'Plane'
         elif 'bookstack' in msg or 'bookstack' in container:
             svc = 'BookStack'
         elif 'orchestrator' in msg or 'orchestrator' in container:

@@ -20,7 +20,7 @@
 
 ### 1. Error Reception & Triage
 
-**Users report errors directly to Doctor through Taiga ticket.**
+**Users report errors directly to Doctor through Plane ticket.**
 
 ```
 User Report Flow:
@@ -203,7 +203,7 @@ INTEGRATION_ERROR:
 ## Doctor Workflow (Visual)
 
 ```
-RECEIVE ERROR REPORT (Taiga ticket)
+RECEIVE ERROR REPORT (Plane ticket)
         │
         ▼
 ┌───────────────────┐
@@ -446,12 +446,12 @@ You are Hermes Doctor, the autonomous system doctor for Project Turing.
 
 IDENTITY:
 - You are the system doctor for Project Turing
-- Users report errors to you via Taiga tickets
+- Users report errors to you via Plane tickets
 - You diagnose, attempt fixes, and escalate what you can't fix
 - You are the Crown Jewel of Turing OS — the key differentiator
 
 WORKFLOW:
-1. Receive error report via Taiga ticket
+1. Receive error report via Plane ticket
 2. Run: run_self_healing_pipeline(error_description)
 3. Report diagnosis and outcome to user
 4. If escalated: provide GitHub issue URL
@@ -507,7 +507,7 @@ Dashboard: `get_doctor_dashboard()` returns recent errors, fix success rate, ope
 Examples:
 - Worker container fails to start
 - Webhook not triggered
-- Taiga API returns unexpected error
+- Plane API returns unexpected error
 - Docker command fails
 
 Doctor Action:
@@ -537,7 +537,7 @@ Doctor Action:
 
 ```
 Examples:
-- Taiga API connection fails
+- Plane API connection fails
 - Matrix DM not sent
 - Context7 API timeout
 - BookStack secret not found
@@ -608,7 +608,7 @@ RECEIVE ERROR REPORT
 ### How Users Report Errors
 
 ```
-In Taiga, create a ticket:
+In Plane, create a ticket:
 - Title: "Bug: [brief description]"
 - Category label: "doctor-report"
 - Priority: P1-P3 based on impact
@@ -773,8 +773,8 @@ KNOWN_ISSUES = {
     
     "taiga_webhook_miss": {
         "symptoms": "Ticket created but no worker spawned",
-        "causes": ["webhook not configured", "network issue", "Taiga down"],
-        "fix": "Check Taiga webhook settings, test connectivity"
+        "causes": ["webhook not configured", "network issue", "Plane down"],
+        "fix": "Check Plane webhook settings, test connectivity"
     },
     
     "context7_timeout": {
@@ -815,7 +815,7 @@ IDENTITY:
 - You escalate what you can't fix
 
 WORKFLOW:
-1. Receive error report via Taiga ticket
+1. Receive error report via Plane ticket
 2. Triage: categorize the error
 3. Diagnose: find root cause
 4. Attempt fix if possible
@@ -841,7 +841,7 @@ COMMUNICATION:
 
 ### Available Tools
 
-- `read_ticket` - Get full error details from Taiga
+- `read_ticket` - Get full error details from Plane
 - `update_ticket_status` - Update progress and resolution
 - `add_comment` - Communicate with user
 - `execute_terminal_command` - Run diagnostics

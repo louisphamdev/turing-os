@@ -22,12 +22,7 @@ export type Permission =
   | 'llm:read'
   | 'llm:write'
   | 'llm:*'
-  // Taiga permissions
-  | 'taiga:read'
-  | 'taiga:write'
-  | 'taiga:create-task'
-  | 'taiga:*'
-  // Plane permissions (mirror Taiga; granted when STATE_BACKEND=plane)
+  // Plane permissions (ticket / user-story persistence)
   | 'plane:read'
   | 'plane:write'
   | 'plane:create-task'
@@ -36,10 +31,6 @@ export type Permission =
   | 'bookstack:read'
   | 'bookstack:write'
   | 'bookstack:*'
-  // Wiki permissions (legacy alias for bookstack — kept for backward compat)
-  | 'wiki:read'
-  | 'wiki:write'
-  | 'wiki:*'
   // Matrix permissions
   | 'matrix:read'
   | 'matrix:write'
@@ -56,91 +47,71 @@ export type Permission =
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   'software-engineer': [
     'llm:*',
-    'taiga:read', 'taiga:write', 'taiga:create-task',
     'plane:read', 'plane:write', 'plane:create-task',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
     'github:read', 'github:write', 'github:repo',
   ],
 
   'qa': [
     'llm:read',
-    'taiga:read', 'taiga:write', 'taiga:create-task',
     'plane:read', 'plane:write', 'plane:create-task',
     'bookstack:read',
-    'wiki:read',
     'github:read',
   ],
 
   'devops': [
     'llm:read',
-    'taiga:read',
     'plane:read',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
     'github:read', 'github:write', 'github:repo',
     'matrix:read', 'matrix:write',
   ],
 
   'data': [
     'llm:*',
-    'taiga:read',
     'plane:read',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
   ],
 
   'security': [
     'llm:read',
-    'taiga:*',
     'plane:*',
     'bookstack:*',
-    'wiki:*',
     'github:*',
     'matrix:*',
   ],
 
   'hr': [
     'llm:read',
-    'taiga:read', 'taiga:write',
     'plane:read', 'plane:write',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
   ],
 
   'pm': [
     'llm:read',
-    'taiga:*',
     'plane:*',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
     'matrix:read', 'matrix:write',
   ],
 
   'po': [
     'llm:read',
-    'taiga:read', 'taiga:write',
     'plane:read', 'plane:write',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
   ],
 
   'network': [
     'llm:read',
-    'taiga:read',
     'plane:read',
     'bookstack:read', 'bookstack:write',
-    'wiki:read', 'wiki:write',
     'github:read',
     'matrix:read', 'matrix:write',
   ],
 
   'doctor': [
     'llm:read',
-    'taiga:read', 'taiga:write',
     'plane:read', 'plane:write',
     'bookstack:*',
-    'wiki:*',
     'github:read',
   ],
 };
@@ -224,7 +195,7 @@ export class RBACService {
   /**
    * Check if a role can access a service
    */
-  canAccessService(role: Role, service: 'llm' | 'taiga' | 'plane' | 'bookstack' | 'matrix' | 'github'): boolean {
+  canAccessService(role: Role, service: 'llm' | 'plane' | 'bookstack' | 'matrix' | 'github'): boolean {
     const permissions = this.getPermissionsForRole(role);
 
     const servicePermissions = permissions.filter(p =>
@@ -239,7 +210,7 @@ export class RBACService {
    */
   canPerformAction(
     role: Role,
-    service: 'llm' | 'taiga' | 'plane' | 'bookstack' | 'matrix' | 'github',
+    service: 'llm' | 'plane' | 'bookstack' | 'matrix' | 'github',
     action: 'read' | 'write' | 'admin'
   ): boolean {
     if (action === 'admin') {
@@ -268,10 +239,8 @@ export class RBACService {
   validatePermission(permission: string): permission is Permission {
     const validPermissions: Permission[] = [
       'llm:read', 'llm:write', 'llm:*',
-      'taiga:read', 'taiga:write', 'taiga:create-task', 'taiga:*',
       'plane:read', 'plane:write', 'plane:create-task', 'plane:*',
       'bookstack:read', 'bookstack:write', 'bookstack:*',
-      'wiki:read', 'wiki:write', 'wiki:*',
       'matrix:read', 'matrix:write', 'matrix:*',
       'github:read', 'github:write', 'github:repo', 'github:*',
       '*',

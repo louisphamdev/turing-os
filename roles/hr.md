@@ -19,7 +19,7 @@ HR operates as a **talent acquisition & resource manager** for the AI engineerin
 
 ### 1. Recruitment Management
 
-- Receive staffing requests from PM (via Taiga tickets)
+- Receive staffing requests from PM (via Plane tickets)
 - Check existing engineers for availability
 - Match engineers to tasks based on required skills
 - Create new engineers when no match exists
@@ -89,7 +89,7 @@ If PM doesn't respond in 2 minutes:
 
 ### Core Tools
 - `execute_terminal_command` - Run scripts, read files
-- `read_ticket` - Get ticket details from Taiga
+- `read_ticket` - Get ticket details from Plane
 - `update_ticket_status` - Update ticket status
 - `add_comment` - Add HR updates to tickets
 

@@ -89,13 +89,13 @@ class HermesAgent:
 
     def _register_default_tools(self):
         """Register the built-in tools"""
-        from tools import taiga_tools, bookstack_tools as wiki_tools, local_exec, research_tools, matrix_tools
+        from tools import state_backend, bookstack_tools as wiki_tools, local_exec, research_tools, matrix_tools
 
-        self.register_tool('update_ticket_status', taiga_tools.update_ticket_status)
-        self.register_tool('read_ticket', taiga_tools.read_ticket)
-        self.register_tool('add_comment', taiga_tools.add_comment)
-        self.register_tool('create_ticket', taiga_tools.create_ticket)
-        self.register_tool('search_tickets', taiga_tools.search_tickets)
+        self.register_tool('update_ticket_status', state_backend.update_ticket_status)
+        self.register_tool('read_ticket', state_backend.read_ticket)
+        self.register_tool('add_comment', state_backend.add_comment)
+        self.register_tool('create_ticket', state_backend.create_ticket)
+        self.register_tool('search_tickets', state_backend.search_tickets)
         self.register_tool('execute_terminal_command', local_exec.execute_terminal_command)
         self.register_tool('read_file', local_exec.read_file)
         self.register_tool('write_file', local_exec.write_file)

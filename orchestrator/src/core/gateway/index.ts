@@ -6,7 +6,6 @@
 
 export { ProxyHandler, getProxyHandler, GatewayConfig } from './proxy-handler';
 export { LLMProxy } from './llm-proxy';
-export { TaigaProxy } from './taiga-proxy';
 export { PlaneProxy } from './plane-proxy';
 export { BookStackProxy } from './bookstack-proxy';
 export { MatrixProxy } from './matrix-proxy';

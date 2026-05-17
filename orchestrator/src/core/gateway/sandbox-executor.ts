@@ -203,7 +203,7 @@ export class SandboxExecutor {
       ROLE: request.context.role,
       // Clear any other sensitive vars
       LLM_API_KEY: undefined,
-      TAIGA_API_KEY: undefined,
+      PLANE_API_TOKEN: undefined,
       BOOKSTACK_TOKEN: undefined,
       MATRIX_BOT_TOKEN: undefined,
     };
@@ -218,7 +218,7 @@ ${Object.entries(safeEnv)
   .join('\n')}
 
 // Clear other sensitive env vars
-const sensitiveKeys = ['LLM_API_KEY', 'TAIGA_API_KEY', 'BOOKSTACK_TOKEN', 'MATRIX_BOT_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'];
+const sensitiveKeys = ['LLM_API_KEY', 'PLANE_API_TOKEN', 'BOOKSTACK_TOKEN', 'MATRIX_BOT_TOKEN', 'GITHUB_TOKEN', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY'];
 sensitiveKeys.forEach(key => delete process.env[key]);
 
 // Gateway helper (safe API access only)

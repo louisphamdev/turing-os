@@ -47,6 +47,5 @@ htmlcov/
 
 # Local volume data (do not bake into images)
 bookstack_data/
-wiki_data/
 synapse/data
 synapse/media

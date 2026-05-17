@@ -11,7 +11,7 @@ import * as path from 'path';
 
 export interface StoredCredential {
   id: string;
-  type: 'llm' | 'taiga' | 'plane' | 'bookstack' | 'matrix' | 'github';
+  type: 'llm' | 'plane' | 'bookstack' | 'matrix' | 'github';
   provider: 'openai' | 'anthropic' | 'minimax' | 'google' | 'ollama' | 'generic';
   encryptedKey: string;
   keyHash: string;          // SHA-256 hash for verification without decryption
@@ -296,7 +296,6 @@ export class CredentialVault {
       { envVar: 'ANTHROPIC_API_KEY', type: 'llm', provider: 'anthropic', label: 'Anthropic' },
       { envVar: 'MINIMAX_API_KEY', type: 'llm', provider: 'minimax', label: 'MiniMax' },
       { envVar: 'GOOGLE_API_KEY', type: 'llm', provider: 'google', label: 'Google' },
-      { envVar: 'TAIGA_API_KEY', type: 'taiga', provider: 'generic', label: 'Taiga' },
       { envVar: 'PLANE_API_TOKEN', type: 'plane', provider: 'generic', label: 'Plane' },
       { envVar: 'BOOKSTACK_TOKEN', type: 'bookstack', provider: 'generic', label: 'BookStack' },
       { envVar: 'MATRIX_BOT_TOKEN', type: 'matrix', provider: 'generic', label: 'Matrix' },

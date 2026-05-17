@@ -46,11 +46,11 @@ export const config = {
     model: optionalEnv('LLM_MODEL', 'gpt-4o'),
   },
 
-  taiga: {
-    apiUrl: optionalEnv('TAIGA_API_URL', 'http://taiga-gateway:80/api/v1'),
-    authUrl: optionalEnv('TAIGA_AUTH_URL', 'http://taiga-gateway:80/api/v1'),
-    apiKey: optionalEnv('TAIGA_API_KEY', ''),
-    projectSlug: optionalEnv('TAIGA_PROJECT_SLUG', 'turing-os'),
+  plane: {
+    apiUrl: optionalEnv('PLANE_API_URL', 'http://turing_plane_api:8000/api/v1'),
+    apiToken: optionalEnv('PLANE_API_TOKEN', ''),
+    workspace: optionalEnv('PLANE_WORKSPACE_SLUG', 'turing'),
+    projectId: optionalEnv('PLANE_PROJECT_ID', ''),
   },
 
   matrix: {
@@ -115,7 +115,7 @@ export function logConfigSummary(): void {
   console.log(`[Config] Port: ${config.port}`);
   console.log(`[Config] LLM Provider: ${config.llm.provider} (model: ${config.llm.model})`);
   console.log(`[Config] LLM API Key: ${llmKeyStatus}`);
-  console.log(`[Config] Taiga: ${config.taiga.apiUrl} (key: ${config.taiga.apiKey ? '✓' : '✗'})`);
+  console.log(`[Config] Plane: ${config.plane.apiUrl} (token: ${config.plane.apiToken ? '✓' : '✗'})`);
   console.log(`[Config] Matrix: ${config.matrix.apiUrl} (token: ${config.matrix.botToken ? '✓' : '✗'})`);
   console.log(`[Config] BookStack: ${config.bookstack.url} (token: ${config.bookstack.apiToken ? '✓' : '✗'})`);
   console.log(`[Config] Context7: ${config.context7.apiKey ? '✓ Set' : '✗ Missing'}`);

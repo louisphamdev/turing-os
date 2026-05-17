@@ -1,5 +1,7 @@
 #!/bin/bash
-# Auto-create admin and bot users for Taiga and Matrix
+# Auto-create the Matrix admin + bot users for HITL chat.
+# Plane CE has its own onboarding UI — generate an API token there manually
+# and paste it into PLANE_API_TOKEN in .env.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,8 +18,6 @@ fi
 
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASSWORD}"
-TAIGA_SCHEME="${TAIGA_SCHEME:-http}"
-TAIGA_DOMAIN="${TAIGA_DOMAIN:-localhost:9000}"
 SYNAPSE_API_URL="${SYNAPSE_API_URL:-http://localhost:8008}"
 REGISTRATION_SECRET="${SYNAPSE_REGISTRATION_SECRET:-f643143e19d68d088741f6ca465894bb6964ca284b5d2c58a8dcc3348750f4e4}"
 MATRIX_BOT_USER="${MATRIX_BOT_USER:-turing-bot}"
@@ -65,50 +65,6 @@ token_is_usable() {
     local token="$1"
     [[ -n "$token" && "$token" != "ERROR" ]]
 }
-
-# ─── TAIGA ───────────────────────────────────────────────────────────────────
-echo "--- TAIGA ---"
-wait_for "${TAIGA_SCHEME}://${TAIGA_DOMAIN}/api/v1/" "Taiga API"
-
-if docker ps --filter "name=turing_taiga_back" --format "{{.Names}}" 2>/dev/null | grep -q "turing_taiga_back"; then
-    echo "Creating Taiga superuser..."
-    docker exec \
-        -e TURING_ADMIN_USER="$ADMIN_USER" \
-        -e TURING_ADMIN_PASS="$ADMIN_PASS" \
-        -i turing_taiga_back python manage.py shell << 'PYEOF'
-import os
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
-username = os.environ['TURING_ADMIN_USER']
-password = os.environ['TURING_ADMIN_PASS']
-email = f'admin@{username}.local'
-
-if not User.objects.filter(username=username).exists():
-    User.objects.create_superuser(username, email, password)
-    print("OK")
-else:
-    u = User.objects.get(username=username)
-    u.email = email
-    u.set_password(password)
-    u.save()
-    print("OK")
-PYEOF
-fi
-
-echo "Getting Taiga auth token..."
-TAIGA_RESP=$(curl -s -X POST "${TAIGA_SCHEME}://${TAIGA_DOMAIN}/api/v1/auth" \
-    -H "Content-Type: application/json" \
-    -d "{\"type\":\"normal\",\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}")
-
-TAIGA_TOKEN=$(echo "$TAIGA_RESP" | grep -o '"auth_token":"[^"]*"' | cut -d'"' -f4)
-
-if [[ -n "$TAIGA_TOKEN" ]]; then
-    echo "OK: Taiga token obtained"
-    upsert_env "TAIGA_API_KEY" "$TAIGA_TOKEN"
-else
-    echo "FAIL: Taiga token"
-fi
 
 # ─── MATRIX ──────────────────────────────────────────────────────────────────
 echo "--- MATRIX ---"
@@ -187,5 +143,9 @@ fi
 upsert_env "MATRIX_ADMIN_USER_ID" "@$ADMIN_USER:localhost"
 
 echo "--- DONE ---"
-echo "Taiga: $([[ -n "$TAIGA_TOKEN" ]] && echo OK || echo FAIL)"
-echo "Matrix: @$ADMIN_USER:localhost" 
+echo "Matrix: @$ADMIN_USER:localhost"
+echo
+echo "Next: open http://localhost:9000 to finish Plane onboarding."
+echo "  1. Create the workspace ($PLANE_WORKSPACE_SLUG)."
+echo "  2. Create the project, copy its UUID to PLANE_PROJECT_ID in .env."
+echo "  3. Generate an API token in Profile -> API Tokens, paste into PLANE_API_TOKEN."

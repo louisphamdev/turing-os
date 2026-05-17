@@ -153,7 +153,7 @@ CIRCUIT_BREAKER = {
 
 ## Timeout Implementation
 
-### Worker-Side (taiga_tools.py)
+### Worker-Side (state_backend.py)
 
 ```python
 async def send_to_pm_with_timeout(message: str, timeout: int = 300):

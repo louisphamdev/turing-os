@@ -281,7 +281,7 @@ if (process.env.GATEWAY_ENABLED !== 'false') {
     req.url = req.url.replace('/gateway/llm', '/gateway/llm');
     await proxyHandler.handleRequest(req, res);
   });
-  app.all('/gateway/taiga/*', async (req, res) => {
+  app.all('/gateway/plane/*', async (req, res) => {
     await proxyHandler.handleRequest(req, res);
   });
   app.all('/gateway/bookstack/*', async (req, res) => {
@@ -415,8 +415,8 @@ app.get('/containers', async (req, res) => {
       ['data',         /(^|[-_])data[-_]/i],
       ['network',      /network/i],
       ['security',     /security/i],
-      ['taiga',        /taiga/i],
-      ['wiki',         /wiki/i],
+      ['plane',        /plane/i],
+      ['bookstack',    /bookstack|wiki/i],
       ['synapse',      /synapse|matrix/i],
       ['redis',        /redis/i],
       ['postgres',     /postgres/i],

@@ -1,20 +1,16 @@
 """
-StateBackend ABC — phase 2 of the Taiga->Plane migration.
+StateBackend — single backend (Plane CE).
 
-Workers used to import taiga_tools directly. Phase 1 added an abstract
-interface so the active backend can be swapped via the STATE_BACKEND
-env var (taiga | plane). Phase 2 implements PlaneBackend against the
-Plane CE REST API so STATE_BACKEND=plane can be deployed end-to-end.
+Workers persist ticket / user-story state in Plane CE. The ABC is kept so
+future swaps don't ripple through callers, but Taiga is gone — selecting
+STATE_BACKEND=taiga prints a warning and falls back to PlaneBackend.
 
-Plane CE references (verified against plane-ce v0.21):
+Plane CE REST API (verified against plane-ce v0.21):
   - Base:    {PLANE_API_URL}/workspaces/{slug}/projects/{project_id}/...
   - Auth:    `X-API-Key: <PLANE_API_TOKEN>` header
   - Issues:  GET/POST /issues/, GET/PATCH /issues/{issue_id}/
   - States:  GET /states/ → list of states (id, name, group)
   - Comments: GET/POST /issues/{issue_id}/comments/
-
-If the deployment uses a fork or different version, only `_make_request`
-and `_resolve_state_id` should need adjustment.
 """
 
 from __future__ import annotations
@@ -48,61 +44,6 @@ class StateBackend(ABC):
     def add_comment(self, ticket_id: str, comment: str) -> dict:
         """Append a comment to the ticket."""
 
-
-class TaigaBackend(StateBackend):
-    """Thin wrapper around the existing taiga_tools functions."""
-
-    name = "taiga"
-
-    def update_ticket_status(self, ticket_id: str, new_status: str, comment: str = "") -> dict:
-        from . import taiga_tools
-        return taiga_tools.update_ticket_status(ticket_id, new_status, comment)
-
-    def read_ticket(self, ticket_id: str) -> dict:
-        from . import taiga_tools
-        return taiga_tools.read_ticket(ticket_id)
-
-    def list_tickets(self, status: Optional[str] = None) -> dict:
-        from . import taiga_tools
-        fn = getattr(taiga_tools, "list_tickets", None)
-        if not callable(fn):
-            return {"tickets": [], "error": "taiga_tools.list_tickets is not implemented"}
-        raw = fn(status)
-        if isinstance(raw, dict) and "error" in raw:
-            return {"tickets": [], "error": raw["error"]}
-        stories = raw if isinstance(raw, list) else raw.get("tickets", []) if isinstance(raw, dict) else []
-        return {"tickets": [self._normalise(s) for s in stories]}
-
-    def add_comment(self, ticket_id: str, comment: str) -> dict:
-        from . import taiga_tools
-        fn = getattr(taiga_tools, "add_comment", None)
-        if callable(fn):
-            return fn(ticket_id, comment)
-        return {"error": "taiga_tools.add_comment is not implemented"}
-
-    @staticmethod
-    def _normalise(story: dict) -> dict:
-        """Project a Taiga user-story onto the cross-backend shape."""
-        status_name = (
-            (story.get("status_extra_info") or {}).get("name")
-            or story.get("status_name", "")
-            or ""
-        )
-        return {
-            "id": story.get("id"),
-            "ref": story.get("ref"),
-            "title": story.get("subject", ""),
-            "description": story.get("description", ""),
-            "status": story.get("status"),
-            "status_name": status_name,
-            "priority": story.get("priority"),
-            "tags": story.get("tags") or [],
-            "assigned_to": story.get("assigned_to"),
-            "raw": story,
-        }
-
-
-# ─── Plane CE backend ────────────────────────────────────────────────────────
 
 # Map abstract status names to Plane state group hints. Plane states are
 # project-defined; we match by group first then by name within the group.
@@ -145,7 +86,6 @@ class PlaneBackend(StateBackend):
         if comment:
             comment_result = self.add_comment(ticket_id, comment)
             if "error" in comment_result:
-                # Status update succeeded but comment failed — flag both.
                 result["comment_error"] = comment_result["error"]
 
         return result
@@ -181,7 +121,6 @@ class PlaneBackend(StateBackend):
         if "error" in result:
             return result
 
-        # Plane returns either a list or a paginated dict with 'results'.
         items = result if isinstance(result, list) else result.get("results", [])
         state_lookup = {str(s.get("id")): s for s in self._load_states()}
         return {"tickets": [self._normalise_issue(i, state_lookup) for i in items]}
@@ -317,15 +256,8 @@ class PlaneBackend(StateBackend):
 
 
 def get_backend() -> StateBackend:
-    """Return the active backend selected by STATE_BACKEND env var.
-
-    STATE_BACKEND=taiga (default) returns TaigaBackend.
-    STATE_BACKEND=plane returns PlaneBackend.
-    """
-    selected = (os.environ.get("STATE_BACKEND") or "taiga").strip().lower()
-    if selected == "plane":
-        return PlaneBackend()
-    if selected == "taiga":
-        return TaigaBackend()
-    print(f"[StateBackend] WARNING: unknown STATE_BACKEND={selected!r}, falling back to taiga")
-    return TaigaBackend()
+    """Return the active backend. Plane is the only implementation now."""
+    selected = (os.environ.get("STATE_BACKEND") or "plane").strip().lower()
+    if selected and selected not in ("plane", ""):
+        print(f"[StateBackend] WARNING: STATE_BACKEND={selected!r} is no longer supported. Falling back to plane.")
+    return PlaneBackend()

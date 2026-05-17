@@ -10,7 +10,7 @@ Worker Container
 ├── agent/
 │   └── hermes_loop.py   # ReAct reasoning engine + LLM integration
 └── tools/
-    ├── taiga_tools.py      # Ticket management
+    ├── state_backend.py      # Ticket management
     ├── bookstack_tools.py      # Document access (BookStack)
     └── local_exec.py       # Sandbox command execution
 ```
@@ -63,9 +63,9 @@ agent.register_tools({'my_tool': my_custom_tool, ...})
 | `ROLE` | No | Worker role (default: "default") |
 | `LLM_API_KEY` | Yes | API key for LLM provider |
 | `LLM_PROVIDER` | No | "openai" or "anthropic" (default: openai) |
-| `TAIGA_API_URL` | No | Taiga API URL (http://taiga-gateway:9000/api/v1) |
-| `TAIGA_API_KEY` | No | Taiga auth token (auto from init-admin-users.sh) |
-| `TAIGA_PROJECT_SLUG` | No | Taiga project slug |
+| `PLANE_API_URL` | No | Plane API URL (http://taiga-gateway:9000/api/v1) |
+| `PLANE_API_TOKEN` | No | Plane auth token (auto from init-admin-users.sh) |
+| `PLANE_WORKSPACE_SLUG` | No | Plane project slug |
 
 ## Message History
 
@@ -85,7 +85,7 @@ for msg in history:
 **IMPORTANT**: Worker containers are ephemeral. On exit:
 - No files persist
 - No memory retained
-- All state MUST be stored in Taiga or BookStack
+- All state MUST be stored in Plane or BookStack
 
 The container's `HostConfig.AutoRemove: true` ensures cleanup.
 

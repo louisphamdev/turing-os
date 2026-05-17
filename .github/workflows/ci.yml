@@ -72,6 +72,3 @@ jobs:
 
       - name: Validate default stack
         run: docker compose -f docker-compose.yml config > /dev/null
-
-      - name: Validate Plane profile
-        run: docker compose -f docker-compose.yml --profile plane config > /dev/null

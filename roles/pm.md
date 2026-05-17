@@ -86,7 +86,7 @@ Execution Modes:
 
 P0 Interrupt Flow (Sequential Mode):
 1. P0 arrives → send PAUSE to current worker
-2. Worker saves checkpoint to Taiga
+2. Worker saves checkpoint to Plane
 3. Task status → PAUSED
 4. P0 starts immediately
 5. P0 completes → resume paused task
@@ -405,7 +405,7 @@ PM Health Monitor:
 
 ```
 Stuck Worker Investigation:
-1. Get current task status from Taiga
+1. Get current task status from Plane
 2. If task BLOCKED → don't kill (expected)
 3. If task not blocked → try ping worker
 4. If no response → KILL + RESPAWN
@@ -420,7 +420,7 @@ Stuck Worker Investigation:
 Architecture:
 ┌─────────────────────────────────────────┐
 │           PRIMARY PM                     │
-│  • Writes state to Taiga every 30s       │
+│  • Writes state to Plane every 30s       │
 │  • Heartbeat: ping:timestamp             │
 │  • Normal operations                     │
 └─────────────────────────────────────────┘
@@ -430,7 +430,7 @@ Architecture:
                      ▼
 ┌─────────────────────────────────────────┐
 │           STANDBY PM                     │
-│  • Reads state from Taiga                │
+│  • Reads state from Plane                │
 │  • Monitors primary heartbeat           │
 │  • If primary offline > 60s → TAKE OVER  │
 └─────────────────────────────────────────┘
@@ -444,9 +444,9 @@ Failover Trigger:
 
 Takeover Sequence:
 1. Standby logs: "Primary PM dead, initiating takeover"
-2. Standby updates Taiga: marks self as primary
+2. Standby updates Plane: marks self as primary
 3. Standby broadcasts to workers: new PM active
-4. Standby reads full state from Taiga
+4. Standby reads full state from Plane
 5. Standby resumes operations
 6. Old primary (if comes back) → becomes standby
 ```
@@ -467,7 +467,7 @@ PM Commands for Failover:
 Worker Safemode (no PM available):
 1. STOP: Stop accepting new tasks
 2. COMPLETE: Finish current atomic operation
-3. SAVE: Checkpoint progress to Taiga
+3. SAVE: Checkpoint progress to Plane
 4. LOG: "PM unreachable, entering safemode"
 5. WAIT: For PM to restore
 6. RESUME: On PM restore, reconnect and continue
@@ -581,7 +581,7 @@ If missing → Go back to PO for clarification
 4. **Prioritized**: Is this the most important thing?
 
 ### During Execution
-1. **Track**: Progress visible in Taiga tickets
+1. **Track**: Progress visible in Plane tickets
 2. **Block Early**: Flag issues before they escalate
 3. **Update Often**: Keep PO informed of status
 4. **Deliver Increments**: Show progress, not just final result
@@ -590,7 +590,7 @@ If missing → Go back to PO for clarification
 - Assess impact before committing to changes
 - Update timeline and notify PO immediately
 - Document all change requests in task comments
-- Maintain single source of truth in Taiga
+- Maintain single source of truth in Plane
 
 ---
 
@@ -640,7 +640,7 @@ When LLM rate limit is hit:
 4. When rate limit resets → auto-resume from checkpoint
 
 When budget exhausted:
-1. Save all work to Taiga/BookStack
+1. Save all work to Plane/BookStack
 2. Signal BLOCKED status with "budget_exhausted" tag
 3. Wait for credit refills
 4. Resume automatically when funded
@@ -674,7 +674,7 @@ These tools are automatically registered for PM role workers:
 |------|---------|
 | `get_workers_health()` | Status of all active workers |
 | `get_stuck_workers()` | List workers with stuck/warning/dead status |
-| `get_queue_status()` | Pending/blocked/done task counts from Taiga |
+| `get_queue_status()` | Pending/blocked/done task counts from Plane |
 | `detect_stuck_workers()` | Detailed diagnostic of problem workers |
 | `report_project_health()` | Formatted markdown report for admin (Matrix) |
 | `check_dependency_wait()` | Deadlock detection (multiple workers stuck) |

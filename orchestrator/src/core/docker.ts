@@ -64,21 +64,19 @@ export class DockerService {
     const envVars: string[] = [
       `TICKET_ID=${ticketId}`,
       `ROLE=${role}`,
-      `TAIGA_API_URL=${config.taiga.apiUrl}`,
-      `TAIGA_PROJECT_SLUG=${config.taiga.projectSlug}`,
       `BOOKSTACK_URL=${config.bookstack.url}`,
       `ORCHESTRATOR_URL=${config.orchestrator.url}`,
       `SYNAPSE_API_URL=${config.matrix.apiUrl}`,
       `MATRIX_ROOM_ID=${roomId || ''}`,
       `WORKSPACE_PATH=/workspace`,
-      // Phase 2 migration env — propagate so workers can opt-in to NATS / Plane.
-      `STATE_BACKEND=${process.env.STATE_BACKEND || 'taiga'}`,
-      `PLANE_API_URL=${process.env.PLANE_API_URL || ''}`,
-      `PLANE_API_TOKEN=${process.env.PLANE_API_TOKEN || ''}`,
-      `PLANE_WORKSPACE_SLUG=${process.env.PLANE_WORKSPACE_SLUG || ''}`,
-      `PLANE_PROJECT_ID=${process.env.PLANE_PROJECT_ID || ''}`,
+      // Plane is the only StateBackend now.
+      `STATE_BACKEND=${process.env.STATE_BACKEND || 'plane'}`,
+      `PLANE_API_URL=${config.plane.apiUrl}`,
+      `PLANE_API_TOKEN=${config.plane.apiToken}`,
+      `PLANE_WORKSPACE_SLUG=${config.plane.workspace}`,
+      `PLANE_PROJECT_ID=${config.plane.projectId}`,
       `NATS_URL=${process.env.NATS_URL || 'nats://nats:4222'}`,
-      `WORKER_NATS_SUBSCRIBE=${process.env.WORKER_NATS_SUBSCRIBE || 'false'}`,
+      `WORKER_NATS_SUBSCRIBE=${process.env.WORKER_NATS_SUBSCRIBE || 'true'}`,
     ];
 
     // Gateway mode: inject consumer token instead of real API keys
@@ -134,7 +132,6 @@ export class DockerService {
         },
         NetworkingConfig: {
           EndpointsConfig: {
-            'turing-os_taiga_network': {},
             [config.docker.networkName]: {},
           }
         },
@@ -179,7 +176,6 @@ export class DockerService {
       `LLM_PROVIDER=${provider}`,
       `LLM_MODEL=${config.llm.model}`,
       `LLM_BASE_URL=${config.llm.baseUrl}`,
-      `TAIGA_API_KEY=${config.taiga.apiKey}`,
       `BOOKSTACK_TOKEN=${config.bookstack.apiToken}`,
       `CONTEXT7_API_KEY=${context7ApiKey || config.context7.apiKey || ''}`,
       `MATRIX_BOT_TOKEN=${config.matrix.botToken}`,
@@ -198,7 +194,6 @@ export class DockerService {
       },
       NetworkingConfig: {
         EndpointsConfig: {
-          'turing-os_taiga_network': {},
           [config.docker.networkName]: {},
         }
       },

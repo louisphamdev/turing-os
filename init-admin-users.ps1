@@ -165,9 +165,6 @@ $envMap = Get-EnvMap -EnvFile $envFile
 
 $adminUser = if ($envMap.ADMIN_USER) { $envMap.ADMIN_USER } else { 'admin' }
 $adminPass = if ($envMap.ADMIN_PASSWORD) { $envMap.ADMIN_PASSWORD } else { 'Admin123!' }
-$taigaScheme = if ($envMap.TAIGA_SCHEME) { $envMap.TAIGA_SCHEME } else { 'http' }
-$taigaDomain = if ($envMap.TAIGA_DOMAIN) { $envMap.TAIGA_DOMAIN } else { 'localhost:9000' }
-$taigaApiUrl = '{0}://{1}/api/v1' -f $taigaScheme, $taigaDomain
 $synapseApiUrl = if ($envMap.SYNAPSE_API_URL) { $envMap.SYNAPSE_API_URL } else { 'http://localhost:8008' }
 $registrationSecret = if ($envMap.SYNAPSE_REGISTRATION_SECRET) { $envMap.SYNAPSE_REGISTRATION_SECRET } else { 'f643143e19d68d088741f6ca465894bb6964ca284b5d2c58a8dcc3348750f4e4' }
 $matrixBotUser = if ($envMap.MATRIX_BOT_USER) { $envMap.MATRIX_BOT_USER } else { 'turing-bot' }
@@ -176,61 +173,6 @@ $matrixAdminUserId = '@{0}:localhost' -f $adminUser
 $matrixBotUserId = '@{0}:localhost' -f $matrixBotUser
 
 Log-Info '--- Turing OS Auto User Setup ---'
-Log-Info '--- TAIGA ---'
-[void](Wait-ForUrl -Url "$taigaApiUrl/" -Name 'Taiga API')
-
-try {
-    $taigaContainer = docker ps --filter 'name=turing_taiga_back' --format '{{.Names}}' 2>$null
-} catch {
-    $taigaContainer = ''
-}
-
-if ($taigaContainer -match 'turing_taiga_back') {
-    Log-Info 'Creating Taiga superuser...'
-    $pythonScript = @'
-import os
-from django.contrib.auth import get_user_model
-
-User = get_user_model()
-username = os.environ['TURING_ADMIN_USER']
-password = os.environ['TURING_ADMIN_PASS']
-email = f'admin@{username}.local'
-
-if not User.objects.filter(username=username).exists():
-    User.objects.create_superuser(username, email, password)
-    print('OK')
-else:
-    user = User.objects.get(username=username)
-    user.email = email
-    user.set_password(password)
-    user.save()
-    print('OK')
-'@
-
-    $pythonScript | docker exec -e "TURING_ADMIN_USER=$adminUser" -e "TURING_ADMIN_PASS=$adminPass" -i turing_taiga_back python manage.py shell | Out-Null
-}
-
-Log-Info 'Getting Taiga auth token...'
-$taigaToken = ''
-try {
-    $taigaResponse = Invoke-RestMethod -Uri "$taigaApiUrl/auth" -Method Post -ContentType 'application/json' -Body (@{
-        type = 'normal'
-        username = $adminUser
-        password = $adminPass
-    } | ConvertTo-Json) -TimeoutSec 10
-    if ($null -ne $taigaResponse.auth_token) {
-        $taigaToken = [string]$taigaResponse.auth_token
-    }
-} catch {
-}
-
-if ($taigaToken) {
-    Log-Info 'OK: Taiga token obtained'
-    Upsert-EnvValue -EnvFile $envFile -Key 'TAIGA_API_KEY' -Value $taigaToken
-} else {
-    Log-Fail 'FAIL: Taiga token'
-}
-
 Log-Info '--- MATRIX ---'
 [void](Wait-ForUrl -Url "$synapseApiUrl/_matrix/client/versions" -Name 'Synapse')
 
@@ -262,5 +204,9 @@ if ($matrixBotToken) {
 Upsert-EnvValue -EnvFile $envFile -Key 'MATRIX_ADMIN_USER_ID' -Value $matrixAdminUserId
 
 Log-Info '--- DONE ---'
-Log-Info "Taiga: $(if ($taigaToken) { 'OK' } else { 'FAIL' })"
 Log-Info "Matrix: $matrixAdminUserId"
+Log-Info ''
+Log-Info 'Next: open http://localhost:9000 to finish Plane onboarding.'
+Log-Info '  1. Create the workspace (PLANE_WORKSPACE_SLUG).'
+Log-Info '  2. Create the project, copy its UUID to PLANE_PROJECT_ID in .env.'
+Log-Info '  3. Generate an API token in Profile -> API Tokens, paste into PLANE_API_TOKEN.'

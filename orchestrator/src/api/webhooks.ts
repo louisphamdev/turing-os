@@ -35,8 +35,8 @@ export function webhooksRouter(
 ): Router {
   const router = Router();
 
-  // ─── Taiga Webhook — Triggers worker provisioning ─────────────────────
-  router.post('/taiga', async (req: Request, res: Response) => {
+  // ─── Plane Webhook — Triggers worker provisioning ─────────────────────
+  router.post('/plane', async (req: Request, res: Response) => {
     const ticket_id: string = req.body.ticket_id || req.body.ticketId;
 
     if (!ticket_id) {
@@ -48,14 +48,14 @@ export function webhooksRouter(
 
     const { status, role, priority } = req.body;
     const taskPriority: Priority = (priority as Priority) || 'P2';
-    console.log(`[Webhook] Taiga: ticket=${ticket_id}, status=${status}, role=${role || 'default'}, priority=${taskPriority}`);
+    console.log(`[Webhook] Plane: ticket=${ticket_id}, status=${status}, role=${role || 'default'}, priority=${taskPriority}`);
 
     // Prompt Injection Filter Check
     const description = req.body.description || req.body.subject || '';
     const scanResult = scanTaskDescription(description);
     if (!scanResult.isSafe) {
       console.warn(`[Security] Blocked malicious ticket ${ticket_id}: ${scanResult.reason}`);
-      await matrixService.sendDM(config.matrix.adminUserId || '', `🚨 **Security Alert**\nBlocked Taiga ticket \`${ticket_id}\` due to suspected Prompt Injection.\nReason: ${scanResult.reason}`);
+      await matrixService.sendDM(config.matrix.adminUserId || '', `🚨 **Security Alert**\nBlocked Plane ticket \`${ticket_id}\` due to suspected Prompt Injection.\nReason: ${scanResult.reason}`);
       return res.status(403).json({ error: 'Blocked for security policy violation' });
     }
 

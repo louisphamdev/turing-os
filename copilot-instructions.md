@@ -20,7 +20,7 @@ Turing OS is a multi-agent operating system that simulates a complete IT departm
 **Key Paths:**
 - Orchestrator: `orchestrator/` — TypeScript/Express API gateway, Docker container management
 - Base Worker: `base-worker/` — Python ReAct agent containers
-- Infrastructure: `docker-compose.yml` — Taiga, BookStack, Matrix/Synapse, Element
+- Infrastructure: `docker-compose.yml` — Plane, BookStack, Matrix/Synapse, Element
 
 ## Architecture
 
@@ -29,7 +29,7 @@ PO → PM → HR → Workers (SE, QA, DevOps, Data, Security, ...)
 ```
 
 - **Orchestrator** (port 3001): Central API gateway, spawns ephemeral worker containers via Docker Engine API
-- **Base Worker**: Python ReAct agent with tools for Taiga, BookStack, Matrix, local exec, research
+- **Base Worker**: Python ReAct agent with tools for Plane, BookStack, Matrix, local exec, research
 - **Communication**: All worker↔worker communication MUST go through PM (no direct peer messaging)
 
 ## Key Technologies
@@ -39,7 +39,7 @@ PO → PM → HR → Workers (SE, QA, DevOps, Data, Security, ...)
 | Orchestrator API | TypeScript, Express, Dockerode | `orchestrator/src/` |
 | Worker Agent | Python, httpx, ReAct loop | `base-worker/src/` |
 | Message Broker | Matrix/Synapse (ports 8008/8448) | `synapse/` |
-| Ticket System | Taiga (port 9000) | via docker-compose |
+| Ticket System | Plane (port 9000) | via docker-compose |
 | Documentation | BookStack (port 6875) | via docker-compose |
 | Chat UI | Element Web (port 8080) | `element_config/` |
 
@@ -64,7 +64,7 @@ PO → PM → HR → Workers (SE, QA, DevOps, Data, Security, ...)
 | `project-config.md` | Execution modes (sequential/parallel), priority rules |
 | `worker-communication-protocol.md` | PM-centralized routing rules |
 | `timeout-policy.md` | 5min timeouts, 3 retries, escalation |
-| `pm-failover.md` | Hot-standby PM with Taiga state sync |
+| `pm-failover.md` | Hot-standby PM with Plane state sync |
 | `resource-scaling.md` | Conservative/Balanced/Aggressive modes |
 
 ## Skill Loading

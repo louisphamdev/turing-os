@@ -277,7 +277,7 @@ scale_down_cooldown: 5  # minutes between scale-down decisions
 ### PM Resource Commands
 
 ```python
-# PM can override via Taiga comments or direct command
+# PM can override via Plane comments or direct command
 PM_COMMANDS:
   /scale-up [role]       # Spawn additional worker
   /scale-down [role]     # Stop idle worker

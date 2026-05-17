@@ -1,8 +1,7 @@
-"""Unit tests for the StateBackend abstraction (phase 2 of Taiga->Plane)."""
+"""Unit tests for the StateBackend abstraction (Plane CE)."""
 
 import importlib
-import os
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 
@@ -13,32 +12,31 @@ def reload_module():
     return importlib.reload(state_backend)
 
 
-def test_default_backend_is_taiga(monkeypatch):
+def test_default_backend_is_plane(monkeypatch):
     monkeypatch.delenv("STATE_BACKEND", raising=False)
-    sb = reload_module()
-    backend = sb.get_backend()
-    assert backend.name == "taiga"
-    assert isinstance(backend, sb.TaigaBackend)
-
-
-def test_plane_backend_via_env(monkeypatch):
-    monkeypatch.setenv("STATE_BACKEND", "plane")
     sb = reload_module()
     backend = sb.get_backend()
     assert backend.name == "plane"
     assert isinstance(backend, sb.PlaneBackend)
 
 
-def test_unknown_backend_falls_back_to_taiga(monkeypatch):
+def test_unknown_backend_falls_back_to_plane(monkeypatch):
     monkeypatch.setenv("STATE_BACKEND", "github-projects")
     sb = reload_module()
     backend = sb.get_backend()
-    assert backend.name == "taiga"
+    assert backend.name == "plane"
+
+
+def test_taiga_setting_warns_and_falls_back(monkeypatch):
+    """STATE_BACKEND=taiga is no longer a valid choice but must not crash."""
+    monkeypatch.setenv("STATE_BACKEND", "taiga")
+    sb = reload_module()
+    backend = sb.get_backend()
+    assert backend.name == "plane"
 
 
 def test_plane_backend_missing_config_returns_error(monkeypatch):
     """When PLANE_* env is unset, every call must surface a structured error."""
-    monkeypatch.setenv("STATE_BACKEND", "plane")
     for var in ("PLANE_API_URL", "PLANE_API_TOKEN", "PLANE_WORKSPACE_SLUG", "PLANE_PROJECT_ID"):
         monkeypatch.delenv(var, raising=False)
     sb = reload_module()
@@ -55,7 +53,6 @@ def test_state_backend_is_abstract(monkeypatch):
 
 
 def _configure_plane_env(monkeypatch):
-    monkeypatch.setenv("STATE_BACKEND", "plane")
     monkeypatch.setenv("PLANE_API_URL", "http://plane.example/api/v1")
     monkeypatch.setenv("PLANE_API_TOKEN", "tok-123")
     monkeypatch.setenv("PLANE_WORKSPACE_SLUG", "turing")
@@ -159,6 +156,5 @@ def test_plane_resolve_state_unknown_status_returns_none(monkeypatch):
     with patch.object(backend, "_request", return_value={"results": [
         {"id": "state-todo", "name": "Todo", "group": "unstarted"},
     ]}):
-        # Unknown status, no group match → None → update_ticket_status returns error.
         result = backend.update_ticket_status("T-1", "ABANDONED", "")
     assert "could not resolve Plane state" in result["error"]
