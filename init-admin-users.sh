@@ -10,8 +10,14 @@ ENV_FILE="$SCRIPT_DIR/.env"
 # Load from .env
 if [[ -f "$ENV_FILE" ]]; then
     while IFS== read -r key value; do
-        [[ "$key" =~ ^#.*$ ]] && continue
+        # Strip CR (Windows line endings) and skip comments / blanks.
+        key="${key%$'\r'}"; value="${value%$'\r'}"
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
         [[ -z "$key" ]] && continue
+        # DOCKER_HOST in .env targets the orchestrator container, not the
+        # host shell — exporting unix:///var/run/docker.sock breaks the
+        # docker CLI on Windows (Docker Desktop uses npipe there).
+        [[ "$key" == "DOCKER_HOST" ]] && continue
         export "$key=$value"
     done < "$ENV_FILE"
 fi
@@ -24,6 +30,17 @@ MATRIX_BOT_USER="${MATRIX_BOT_USER:-turing-bot}"
 MATRIX_BOT_PASS="${MATRIX_BOT_PASS:-BotPass123!}"
 
 echo "--- Turing OS Auto User Setup ---"
+
+# Synapse generates its own registration_shared_secret on first boot and
+# writes it to /data/homeserver.yaml. Our env var doesn't override that, so
+# read the active value from the container — otherwise HMAC will mismatch.
+if docker ps --filter "name=synapse" --format "{{.Names}}" 2>/dev/null | grep -q synapse; then
+    SECRET_FROM_FILE=$(docker exec synapse sh -c 'awk -F"\"" "/^registration_shared_secret:/ {print \$2}" /data/homeserver.yaml' 2>/dev/null | tr -d '\r')
+    if [[ -n "$SECRET_FROM_FILE" ]]; then
+        REGISTRATION_SECRET="$SECRET_FROM_FILE"
+        echo "Synapse: using registration_shared_secret from homeserver.yaml"
+    fi
+fi
 
 upsert_env() {
     local key="$1" value="$2"

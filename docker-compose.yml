@@ -1,7 +1,37 @@
+# Plane env block shared between api / worker / beat / migrator.
+# At top-level so docker-compose schema validation accepts the keys.
+x-plane-env: &plane-env
+  DEBUG: "0"
+  DJANGO_SETTINGS_MODULE: plane.settings.production
+  DATABASE_URL: postgresql://${PLANE_DB_USER:-plane}:${PLANE_DB_PASSWORD:-plane_password}@plane-db/${PLANE_DB:-plane}
+  REDIS_URL: redis://turing_redis:6379/2
+  # Celery broker. Plane's settings.common builds CELERY_BROKER_URL from
+  # RABBITMQ_* unless AMQP_URL is set. We point AMQP_URL at the dedicated
+  # plane-mq RabbitMQ container.
+  AMQP_URL: amqp://${PLANE_RMQ_USER:-plane}:${PLANE_RMQ_PASSWORD:-plane_rmq_pass}@plane-mq:5672/${PLANE_RMQ_VHOST:-plane}
+  SECRET_KEY: ${PLANE_SECRET_KEY:-change-me-in-production}
+  WEB_URL: http://localhost:9000
+  ADMIN_BASE_URL: ""
+  ADMIN_BASE_PATH: /god-mode
+  SPACE_BASE_URL: ""
+  SPACE_BASE_PATH: /spaces
+  CORS_ALLOWED_ORIGINS: http://localhost:9000
+  USE_MINIO: "1"
+  AWS_REGION: ""
+  AWS_ACCESS_KEY_ID: ${PLANE_MINIO_ROOT_USER:-plane-minio-admin}
+  AWS_SECRET_ACCESS_KEY: ${PLANE_MINIO_ROOT_PASSWORD:-plane-minio-secret}
+  AWS_S3_ENDPOINT_URL: http://plane-minio:9000
+  AWS_S3_BUCKET_NAME: ${PLANE_S3_BUCKET:-uploads}
+  MINIO_ROOT_USER: ${PLANE_MINIO_ROOT_USER:-plane-minio-admin}
+  MINIO_ROOT_PASSWORD: ${PLANE_MINIO_ROOT_PASSWORD:-plane-minio-secret}
+  BUCKET_NAME: ${PLANE_S3_BUCKET:-uploads}
+  FILE_SIZE_LIMIT: "5242880"
+  GUNICORN_WORKERS: "2"
+
 services:
   # === State (SSoT) - Ticket Management (Plane CE) ===
   plane-db:
-    image: postgres:15-alpine
+    image: postgres:15.8-alpine
     container_name: turing_plane_db
     environment:
       - POSTGRES_DB=${PLANE_DB:-plane}
@@ -18,30 +48,143 @@ services:
       retries: 5
     restart: unless-stopped
 
-  plane-api:
-    image: makeplane/plane-backend:stable
-    container_name: turing_plane_api
-    command: ["./bin/takeoff"]
-    ports:
-      - "9000:8000"
+  plane-minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    container_name: turing_plane_minio
+    command: server /data --console-address ":9090"
     environment:
-      - DATABASE_URL=postgresql://${PLANE_DB_USER:-plane}:${PLANE_DB_PASSWORD:-plane_password}@plane-db/${PLANE_DB:-plane}
-      - REDIS_URL=redis://turing_redis:6379/2
-      - SECRET_KEY=${PLANE_SECRET_KEY:-change-me-in-production}
-      - DEBUG=0
-      - CORS_ALLOWED_ORIGINS=
+      - MINIO_ROOT_USER=${PLANE_MINIO_ROOT_USER:-plane-minio-admin}
+      - MINIO_ROOT_PASSWORD=${PLANE_MINIO_ROOT_PASSWORD:-plane-minio-secret}
+    volumes:
+      - plane_minio_data:/data
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  plane-mq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: turing_plane_mq
+    environment:
+      - RABBITMQ_DEFAULT_USER=${PLANE_RMQ_USER:-plane}
+      - RABBITMQ_DEFAULT_PASS=${PLANE_RMQ_PASSWORD:-plane_rmq_pass}
+      - RABBITMQ_DEFAULT_VHOST=${PLANE_RMQ_VHOST:-plane}
+    volumes:
+      - plane_mq_data:/var/lib/rabbitmq
+    networks:
+      - turing_network
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  plane-migrator:
+    image: makeplane/plane-backend:stable
+    container_name: turing_plane_migrator
+    command: ["./bin/docker-entrypoint-migrator.sh"]
+    environment:
+      <<: *plane-env
     networks:
       - turing_network
     depends_on:
       plane-db:
         condition: service_healthy
+    restart: "no"
+
+  plane-api:
+    image: makeplane/plane-backend:stable
+    container_name: turing_plane_api
+    command: ["./bin/docker-entrypoint-api.sh"]
+    environment:
+      <<: *plane-env
+    networks:
+      turing_network:
+        aliases:
+          - api
+    depends_on:
+      plane-db:
+        condition: service_healthy
+      plane-minio:
+        condition: service_healthy
+      plane-mq:
+        condition: service_healthy
       redis:
         condition: service_healthy
+      plane-migrator:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  plane-worker:
+    image: makeplane/plane-backend:stable
+    container_name: turing_plane_worker
+    command: ["./bin/docker-entrypoint-worker.sh"]
+    environment:
+      <<: *plane-env
+    networks:
+      - turing_network
+    depends_on:
+      plane-api:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-beat:
+    image: makeplane/plane-backend:stable
+    container_name: turing_plane_beat
+    command: ["./bin/docker-entrypoint-beat.sh"]
+    environment:
+      <<: *plane-env
+    networks:
+      - turing_network
+    depends_on:
+      plane-api:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-web:
+    image: makeplane/plane-frontend:stable
+    container_name: turing_plane_web
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=
+      - NEXT_PUBLIC_ADMIN_BASE_URL=
+      - NEXT_PUBLIC_ADMIN_BASE_PATH=/god-mode
+      - NEXT_PUBLIC_SPACE_BASE_URL=
+      - NEXT_PUBLIC_SPACE_BASE_PATH=/spaces
+      - NEXT_PUBLIC_WEB_BASE_URL=
+    networks:
+      turing_network:
+        aliases:
+          - web
+    depends_on:
+      plane-api:
+        condition: service_started
+    restart: unless-stopped
+
+  plane-proxy:
+    image: makeplane/plane-proxy:stable
+    container_name: turing_plane_proxy
+    ports:
+      - "9000:80"
+    environment:
+      - SITE_ADDRESS=:80
+      - FILE_SIZE_LIMIT=5242880
+      - BUCKET_NAME=${PLANE_S3_BUCKET:-uploads}
+    networks:
+      - turing_network
+    depends_on:
+      - plane-web
+      - plane-api
     restart: unless-stopped
 
   # === Docs - Specification Storage (BookStack) ===
   bookstack-db:
-    image: linuxserver/mariadb:latest
+    image: lscr.io/linuxserver/mariadb:latest
     container_name: turing_bookstack_db
     environment:
       - PUID=1000
@@ -55,14 +198,15 @@ services:
     networks:
       - turing_network
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized", "--silent"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     restart: unless-stopped
 
   bookstack:
-    image: linuxserver/bookstack:latest
+    image: lscr.io/linuxserver/bookstack:latest
     container_name: turing_bookstack
     ports:
       - "6875:80"
@@ -72,13 +216,12 @@ services:
       - PUID=1000
       - PGID=1000
       - APP_URL=${BOOKSTACK_URL:-http://localhost:6875}
-      - APP_KEY=${BOOKSTACK_APP_KEY:-some随机keypleasechange}
+      - APP_KEY=${BOOKSTACK_APP_KEY:-some_random_key_change_in_production}
       - DB_HOST=bookstack-db
       - DB_PORT=3306
-      - DB_USER=${BOOKSTACK_DB_USER:-bookstack}
-      - DB_PASS=${BOOKSTACK_DB_PASSWORD:-bookstack_pass}
-      - DB_NAME=${BOOKSTACK_DB_NAME:-bookstack}
-      - DB_TYPE=mysql
+      - DB_USERNAME=${BOOKSTACK_DB_USER:-bookstack}
+      - DB_PASSWORD=${BOOKSTACK_DB_PASSWORD:-bookstack_pass}
+      - DB_DATABASE=${BOOKSTACK_DB_NAME:-bookstack}
     networks:
       - turing_network
     depends_on:
@@ -93,7 +236,7 @@ services:
 
   # === Comms - Matrix Chat (Synapse + Element) ===
   synapse:
-    image: matrixdotorg/synapse:latest
+    image: matrixdotorg/synapse:v1.119.0
     container_name: synapse
     ports:
       - "8008:8008"
@@ -121,7 +264,7 @@ services:
     image: vectorim/element-web:v1.11.34
     container_name: turing_element
     ports:
-      - "8080:80"
+      - "${ELEMENT_PORT:-8081}:80"
     volumes:
       - ./element_config/config.json:/usr/share/nginx/html/config.json:ro
     environment:
@@ -146,31 +289,32 @@ services:
     volumes:
       - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock
       - ./roles:/app/roles:ro
-    environment:
-      - NODE_ENV=development
-      - PORT=${PORT:-3001}
-      - SYNAPSE_API_URL=${SYNAPSE_API_URL:-http://synapse:8008}
-      - MATRIX_BOT_TOKEN=${MATRIX_BOT_TOKEN:-}
-      - MATRIX_ADMIN_USER_ID=${MATRIX_ADMIN_USER_ID:-@admin:localhost}
-      - ORCHESTRATOR_URL=${ORCHESTRATOR_URL:-http://turing-orchestrator:3001}
-      - BOOKSTACK_URL=${BOOKSTACK_URL:-http://bookstack:80}
-      - DOCKER_HOST=${DOCKER_HOST:-unix:///var/run/docker.sock}
-      - AUTO_START_ROLES=${AUTO_START_ROLES:-po,pm,hr,doctor}
-      # ─── Alerting ──────────────────────────────────────────────────────
-      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
-      - ALERT_COOLDOWN_MS=${ALERT_COOLDOWN_MS:-300000}
-      - REDIS_URL=${REDIS_URL:-redis://turing_redis:6379}
-      # ─── NATS message bus (dual-publish admin->worker traffic) ────────
-      - NATS_ENABLED=${NATS_ENABLED:-true}
-      - NATS_URL=${NATS_URL:-nats://nats:4222}
-      # ─── Plane (StateBackend) ─────────────────────────────────────────
-      - STATE_BACKEND=${STATE_BACKEND:-plane}
-      - PLANE_API_URL=${PLANE_API_URL:-http://turing_plane_api:8000/api/v1}
-      - PLANE_API_TOKEN=${PLANE_API_TOKEN:-}
-      - PLANE_WORKSPACE_SLUG=${PLANE_WORKSPACE_SLUG:-turing}
-      - PLANE_PROJECT_ID=${PLANE_PROJECT_ID:-}
+    # IMPORTANT: env_file: .env is loaded first; values in `environment:`
+    # below win and pin the container-network URLs (so .env can keep the
+    # host-network URLs that the bootstrap scripts on the host need).
     env_file:
       - .env
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - SYNAPSE_API_URL=http://synapse:8008
+      - ORCHESTRATOR_URL=http://turing-orchestrator:3001
+      - BOOKSTACK_URL=http://bookstack:80
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - REDIS_URL=redis://turing_redis:6379
+      - NATS_URL=nats://nats:4222
+      - PLANE_API_URL=http://plane-proxy/api/v1
+      # Tokens + identifiers below come from .env (populated by bootstrap)
+      - MATRIX_BOT_TOKEN
+      - MATRIX_ADMIN_USER_ID
+      - PLANE_API_TOKEN
+      - PLANE_WORKSPACE_SLUG
+      - PLANE_PROJECT_ID
+      - STATE_BACKEND
+      - NATS_ENABLED
+      - AUTO_START_ROLES
+      - ALERT_WEBHOOK_URL
+      - ALERT_COOLDOWN_MS
     networks:
       - turing_network
     depends_on:
@@ -178,15 +322,13 @@ services:
       - bookstack
       - redis
       - nats
-      - plane-api
+      - plane-proxy
     restart: unless-stopped
 
-  # === State (Fast) - Redis for PM Failover ===
+  # === State (Fast) - Redis for PM Failover + Plane Celery ===
   redis:
-    image: redis:7.0-alpine
+    image: redis:7.4-alpine
     container_name: turing_redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -202,7 +344,7 @@ services:
   # Internal-only (no exposed port). Carries admin->worker traffic in
   # addition to the per-worker Matrix room used for HITL admin UX.
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.10.22-alpine
     container_name: turing_nats
     command:
       - "-js"
@@ -230,5 +372,7 @@ volumes:
   synapse_data:
   nats_data:
   plane_db_data:
+  plane_minio_data:
+  plane_mq_data:
   worker_workspace:
   redis_data:

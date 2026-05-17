@@ -13,8 +13,12 @@ ENV_FILE="$SCRIPT_DIR/../.env"
 
 if [[ -f "$ENV_FILE" ]]; then
     while IFS== read -r key value; do
-        [[ "$key" =~ ^#.*$ ]] && continue
+        key="${key%$'\r'}"; value="${value%$'\r'}"
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
         [[ -z "$key" ]] && continue
+        # Skip DOCKER_HOST — it targets the orchestrator container, not
+        # the host shell (Docker Desktop on Windows uses npipe).
+        [[ "$key" == "DOCKER_HOST" ]] && continue
         export "$key=$value"
     done < "$ENV_FILE"
 fi

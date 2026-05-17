@@ -32,6 +32,13 @@ Thumbs.db
 *.log
 logs/
 
+# Runtime data (Synapse + BookStack write-on-first-boot state)
+bookstack_data/
+synapse/homeserver.db*
+synapse/media_store/
+synapse/*.signing.key
+synapse/*.log.config
+
 # Temporary files
 tmp/
 temp/
