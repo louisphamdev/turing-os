@@ -203,10 +203,17 @@ if ($matrixBotToken) {
 
 Upsert-EnvValue -EnvFile $envFile -Key 'MATRIX_ADMIN_USER_ID' -Value $matrixAdminUserId
 
+Log-Info '--- PLANE ---'
+$planeBootstrap = Join-Path $RepoRoot 'scripts/bootstrap-plane.ps1'
+if (Test-Path $planeBootstrap) {
+    try {
+        & powershell -ExecutionPolicy Bypass -File $planeBootstrap -RepoRoot $RepoRoot
+    } catch {
+        Log-Warn "WARN: Plane bootstrap failed: $($_.Exception.Message)"
+    }
+} else {
+    Log-Warn "SKIP: $planeBootstrap not found"
+}
+
 Log-Info '--- DONE ---'
 Log-Info "Matrix: $matrixAdminUserId"
-Log-Info ''
-Log-Info 'Next: open http://localhost:9000 to finish Plane onboarding.'
-Log-Info '  1. Create the workspace (PLANE_WORKSPACE_SLUG).'
-Log-Info '  2. Create the project, copy its UUID to PLANE_PROJECT_ID in .env.'
-Log-Info '  3. Generate an API token in Profile -> API Tokens, paste into PLANE_API_TOKEN.'

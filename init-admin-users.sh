@@ -142,10 +142,16 @@ fi
 
 upsert_env "MATRIX_ADMIN_USER_ID" "@$ADMIN_USER:localhost"
 
+# ─── PLANE ───────────────────────────────────────────────────────────────────
+echo "--- PLANE ---"
+PLANE_BOOTSTRAP_SCRIPT="$SCRIPT_DIR/scripts/bootstrap-plane.sh"
+if [[ -x "$PLANE_BOOTSTRAP_SCRIPT" ]]; then
+    bash "$PLANE_BOOTSTRAP_SCRIPT" || echo "WARN: Plane bootstrap script returned non-zero"
+elif [[ -f "$PLANE_BOOTSTRAP_SCRIPT" ]]; then
+    bash "$PLANE_BOOTSTRAP_SCRIPT" || echo "WARN: Plane bootstrap script returned non-zero"
+else
+    echo "SKIP: $PLANE_BOOTSTRAP_SCRIPT not found"
+fi
+
 echo "--- DONE ---"
 echo "Matrix: @$ADMIN_USER:localhost"
-echo
-echo "Next: open http://localhost:9000 to finish Plane onboarding."
-echo "  1. Create the workspace ($PLANE_WORKSPACE_SLUG)."
-echo "  2. Create the project, copy its UUID to PLANE_PROJECT_ID in .env."
-echo "  3. Generate an API token in Profile -> API Tokens, paste into PLANE_API_TOKEN."
