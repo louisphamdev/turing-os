@@ -326,7 +326,7 @@ export class ConsumerTokenManager {
   /**
    * Verify token has access to specific service
    */
-  hasServiceAccess(payload: TokenPayload, service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github'): boolean {
+  hasServiceAccess(payload: TokenPayload, service: 'llm' | 'taiga' | 'plane' | 'bookstack' | 'matrix' | 'github'): boolean {
     const servicePerms = payload.perms.filter(p => p.startsWith(service) || p === '*');
     return servicePerms.length > 0;
   }

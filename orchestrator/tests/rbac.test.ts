@@ -105,6 +105,8 @@ describe('RBAC', () => {
     const validPermissionPatterns = [
       /^llm:(read|write|\*)$/,
       /^taiga:(read|write|create-task|\*)$/,
+      /^plane:(read|write|create-task|\*)$/,
+      /^bookstack:(read|write|\*)$/,
       /^wiki:(read|write|\*)$/,
       /^matrix:(read|write|\*)$/,
       /^github:(read|write|repo|\*)$/,

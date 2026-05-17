@@ -13,6 +13,7 @@ import { AuditLogger, AuditEntry } from './audit-logger';
 import { RateLimiter } from './rate-limiter';
 import { LLMProxy } from './llm-proxy';
 import { TaigaProxy } from './taiga-proxy';
+import { PlaneProxy } from './plane-proxy';
 import { BookStackProxy } from './bookstack-proxy';
 import { MatrixProxy } from './matrix-proxy';
 
@@ -31,12 +32,14 @@ export class ProxyHandler {
   
   private llmProxy: LLMProxy;
   private taigaProxy: TaigaProxy;
+  private planeProxy: PlaneProxy;
   private bookstackProxy: BookStackProxy;
   private matrixProxy: MatrixProxy;
 
   constructor() {
     this.llmProxy = new LLMProxy(this.vault, this.auditLogger);
     this.taigaProxy = new TaigaProxy(this.vault, this.auditLogger);
+    this.planeProxy = new PlaneProxy(this.vault, this.auditLogger);
     this.bookstackProxy = new BookStackProxy(this.vault, this.auditLogger);
     this.matrixProxy = new MatrixProxy(this.vault, this.auditLogger);
   }
@@ -57,7 +60,7 @@ export class ProxyHandler {
       return;
     }
 
-    const service = pathParts[1] as 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'health';
+    const service = pathParts[1] as 'llm' | 'taiga' | 'plane' | 'bookstack' | 'matrix' | 'health';
     
     // Health check endpoint
     if (service === 'health') {
@@ -119,6 +122,15 @@ export class ProxyHandler {
         case 'taiga':
           result = await this.taigaProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
           break;
+        case 'plane':
+          result = await this.planeProxy.proxy(
+            validation.payload,
+            endpoint,
+            method,
+            req.body,
+            req.headers as unknown as Record<string, string>
+          );
+          break;
         case 'bookstack':
           result = await this.bookstackProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
           break;
@@ -174,13 +186,14 @@ export class ProxyHandler {
    * Get credential for a service from vault
    */
   async getCredentialForService(
-    service: 'llm' | 'taiga' | 'bookstack' | 'matrix' | 'github'
+    service: 'llm' | 'taiga' | 'plane' | 'bookstack' | 'matrix' | 'github'
   ): Promise<DecryptedCredential | null> {
     // Map service to provider
     const providerMap: Record<string, string | undefined> = {
       llm: 'openai', // Default, can be overridden per request
       taiga: undefined,
-      wiki: undefined,
+      plane: undefined,
+      bookstack: undefined,
       matrix: undefined,
       github: undefined,
     };

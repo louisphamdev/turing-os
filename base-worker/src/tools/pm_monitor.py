@@ -3,20 +3,28 @@ PM Monitor Tools — Proactive monitoring tools for the PM worker role.
 
 Provides tools for PM to:
 - Check health status of all workers (via orchestrator)
-- Monitor queue depth and task backlog in Taiga
+- Monitor queue depth and task backlog via the active StateBackend
 - Detect stuck or dead workers
 - Report project health to admin via Matrix
 
 This implements the PM-side proactive monitoring described in roles/pm.md.
+Ticket queries go through state_backend.get_backend() so the same code runs
+against Taiga or Plane depending on STATE_BACKEND.
 """
 
 import os
 from typing import Optional
 
 ORCHESTRATOR_URL = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrator:3001')
-TAIGA_API_URL = os.environ.get('TAIGA_API_URL', 'http://taiga-gateway:80/api/v1')
-TAIGA_API_KEY = os.environ.get('TAIGA_API_KEY', '')
-TAIGA_PROJECT_SLUG = os.environ.get('TAIGA_PROJECT_SLUG', 'turing-os')
+
+
+def _tickets() -> list[dict]:
+    """Return the active backend's normalised ticket list (or empty)."""
+    from . import state_backend
+    result = state_backend.get_backend().list_tickets()
+    if isinstance(result, dict) and "tickets" in result:
+        return result["tickets"]
+    return []
 
 
 # ─── Worker Health Queries ────────────────────────────────────────────────────
@@ -81,89 +89,58 @@ def get_stuck_workers() -> list:
 
 def get_queue_status() -> dict:
     """
-    Get current task queue status from Taiga.
-    Returns counts of tasks by status (TODO, IN_PROGRESS, BLOCKED, DONE).
+    Get current task queue status from the active StateBackend.
+    Returns counts of tasks by status (TODO, IN_PROGRESS, BLOCKED, DONE, REVIEW).
     """
-    import requests
+    tickets = _tickets()
 
-    try:
-        # Get user stories filtered by project
-        resp = requests.get(
-            f'{TAIGA_API_URL}/userstories',
-            params={
-                'project': TAIGA_PROJECT_SLUG,
-                'status__is_archived': False,
-            },
-            headers={'Authorization': f'Bearer {TAIGA_API_KEY}'},
-            timeout=10,
-        )
-        
-        if resp.status_code != 200:
-            return {'error': f'Taiga returned {resp.status_code}', 'totals': {}}
-        
-        stories = resp.json() if isinstance(resp.json(), list) else []
-        
-        # Count by status
-        totals = {'TODO': 0, 'IN_PROGRESS': 0, 'BLOCKED': 0, 'DONE': 0, 'REVIEW': 0}
-        for story in stories:
-            status_name = story.get('status_extra_info', {}).get('name', '')
-            story_status = story.get('status_name', status_name).upper()
-            for key in totals:
-                if key in story_status:
-                    totals[key] += 1
-                    break
-        
-        pending = totals.get('TODO', 0) + totals.get('IN_PROGRESS', 0)
-        
-        return {
-            'totals': totals,
-            'pending_count': pending,
-            'blocked_count': totals.get('BLOCKED', 0),
-            'done_count': totals.get('DONE', 0),
-        }
-    except requests.exceptions.RequestException as e:
-        return {'error': str(e), 'totals': {}}
+    totals = {'TODO': 0, 'IN_PROGRESS': 0, 'BLOCKED': 0, 'DONE': 0, 'REVIEW': 0}
+    for ticket in tickets:
+        story_status = (ticket.get('status_name') or '').upper().replace('-', '_').replace(' ', '_')
+        for key in totals:
+            if key in story_status:
+                totals[key] += 1
+                break
+
+    pending = totals.get('TODO', 0) + totals.get('IN_PROGRESS', 0)
+
+    return {
+        'totals': totals,
+        'pending_count': pending,
+        'blocked_count': totals.get('BLOCKED', 0),
+        'done_count': totals.get('DONE', 0),
+    }
 
 
 def get_high_priority_tasks(limit: int = 5) -> list:
     """
     Get high priority tasks (P0, P1) that need attention.
+    Pulled from the active StateBackend; priority comes from tag prefixes
+    (P0/P1) or the backend's native priority field if present.
     """
-    import requests
+    tickets = _tickets()
 
-    try:
-        resp = requests.get(
-            f'{TAIGA_API_URL}/userstories',
-            params={
-                'project': TAIGA_PROJECT_SLUG,
-                'status__is_archived': False,
-            },
-            headers={'Authorization': f'Bearer {TAIGA_API_KEY}'},
-            timeout=10,
-        )
-        
-        if resp.status_code != 200:
-            return []
-        
-        stories = resp.json() if isinstance(resp.json(), list) else []
-        
-        # Filter for TODO/PENDING with high priority
-        high_priority = []
-        for story in stories:
-            tags = story.get('tags', []) or []
-            priority_tag = next((t for t in tags if t.startswith('P0') or t.startswith('P1')), None)
-            status_name = story.get('status_name', '').upper()
-            if status_name in ('TODO', 'NEW', 'PENDING') or priority_tag:
-                high_priority.append({
-                    'id': story.get('ref'),
-                    'subject': story.get('subject'),
-                    'status': story.get('status_name'),
-                    'priority': priority_tag or 'P2',
-                })
-        
-        return high_priority[:limit]
-    except requests.exceptions.RequestException:
-        return []
+    def _priority_tag(tags: list) -> Optional[str]:
+        for tag in tags:
+            text = str(tag if isinstance(tag, str) else (tag.get('name') if isinstance(tag, dict) else ''))
+            if text.startswith('P0') or text.startswith('P1'):
+                return text
+        return None
+
+    high_priority = []
+    for ticket in tickets:
+        tags = ticket.get('tags') or []
+        priority_tag = _priority_tag(tags)
+        status_name = (ticket.get('status_name') or '').upper()
+        if status_name in ('TODO', 'NEW', 'PENDING', 'OPEN', 'BACKLOG') or priority_tag:
+            high_priority.append({
+                'id': ticket.get('ref') or ticket.get('id'),
+                'subject': ticket.get('title') or ticket.get('subject') or '',
+                'status': ticket.get('status_name'),
+                'priority': priority_tag or ticket.get('priority') or 'P2',
+            })
+
+    return high_priority[:limit]
 
 
 # ─── Health Reporting ───────────────────────────────────────────────────────
@@ -223,8 +200,6 @@ def report_project_health() -> str:
     Generate a comprehensive project health report for admin.
     Returns formatted markdown string suitable for Matrix message.
     """
-    import requests
-    
     lines = ["📊 **Project Health Report**", ""]
     
     # ── Worker Health ──
@@ -255,34 +230,21 @@ def report_project_health() -> str:
     # ── Queue Status ──
     queue = get_queue_status()
     if 'error' in queue:
-        lines.append(f"⚠️ Cannot reach Taiga: {queue['error']}")
+        lines.append(f"⚠️ Cannot reach ticket backend: {queue['error']}")
     else:
-        totals = queue.get('totals', {})
         pending = queue.get('pending_count', 0)
         blocked = queue.get('blocked_count', 0)
         done = queue.get('done_count', 0)
-        
+
         lines.append(f"**Task Queue:** {pending} pending | 🔒 {blocked} blocked | ✅ {done} done")
-        
-        # Blocked tasks detail
+
         if blocked > 0:
             lines.append("")
             lines.append("**🔒 Blocked Tasks:**")
-            # Get blocked stories
-            try:
-                resp = requests.get(
-                    f'{TAIGA_API_URL}/userstories',
-                    params={'project': TAIGA_PROJECT_SLUG},
-                    headers={'Authorization': f'Bearer {TAIGA_API_KEY}'},
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    stories = resp.json() if isinstance(resp.json(), list) else []
-                    blocked_stories = [s for s in stories if 'BLOCK' in (s.get('status_name') or '').upper()]
-                    for s in blocked_stories[:5]:  # Show max 5
-                        lines.append(f"  - `{s.get('ref')}`: {s.get('subject', '')[:60]}")
-            except Exception:
-                pass
+            blocked_tickets = [t for t in _tickets() if 'BLOCK' in (t.get('status_name') or '').upper()]
+            for t in blocked_tickets[:5]:
+                title = t.get('title') or t.get('subject') or ''
+                lines.append(f"  - `{t.get('ref') or t.get('id')}`: {title[:60]}")
     
     lines.append("")
     

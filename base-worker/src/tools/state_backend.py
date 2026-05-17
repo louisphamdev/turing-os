@@ -65,9 +65,13 @@ class TaigaBackend(StateBackend):
     def list_tickets(self, status: Optional[str] = None) -> dict:
         from . import taiga_tools
         fn = getattr(taiga_tools, "list_tickets", None)
-        if callable(fn):
-            return fn(status)
-        return {"error": "taiga_tools.list_tickets is not implemented"}
+        if not callable(fn):
+            return {"tickets": [], "error": "taiga_tools.list_tickets is not implemented"}
+        raw = fn(status)
+        if isinstance(raw, dict) and "error" in raw:
+            return {"tickets": [], "error": raw["error"]}
+        stories = raw if isinstance(raw, list) else raw.get("tickets", []) if isinstance(raw, dict) else []
+        return {"tickets": [self._normalise(s) for s in stories]}
 
     def add_comment(self, ticket_id: str, comment: str) -> dict:
         from . import taiga_tools
@@ -75,6 +79,27 @@ class TaigaBackend(StateBackend):
         if callable(fn):
             return fn(ticket_id, comment)
         return {"error": "taiga_tools.add_comment is not implemented"}
+
+    @staticmethod
+    def _normalise(story: dict) -> dict:
+        """Project a Taiga user-story onto the cross-backend shape."""
+        status_name = (
+            (story.get("status_extra_info") or {}).get("name")
+            or story.get("status_name", "")
+            or ""
+        )
+        return {
+            "id": story.get("id"),
+            "ref": story.get("ref"),
+            "title": story.get("subject", ""),
+            "description": story.get("description", ""),
+            "status": story.get("status"),
+            "status_name": status_name,
+            "priority": story.get("priority"),
+            "tags": story.get("tags") or [],
+            "assigned_to": story.get("assigned_to"),
+            "raw": story,
+        }
 
 
 # ─── Plane CE backend ────────────────────────────────────────────────────────
@@ -133,7 +158,8 @@ class PlaneBackend(StateBackend):
         result = self._request("GET", f"/issues/{ticket_id}/")
         if "error" in result:
             return result
-        return self._normalise_issue(result)
+        state_lookup = {str(s.get("id")): s for s in self._load_states()}
+        return self._normalise_issue(result, state_lookup)
 
     def list_tickets(self, status: Optional[str] = None) -> dict:
         err = self._missing_config()
@@ -157,7 +183,8 @@ class PlaneBackend(StateBackend):
 
         # Plane returns either a list or a paginated dict with 'results'.
         items = result if isinstance(result, list) else result.get("results", [])
-        return {"tickets": [self._normalise_issue(i) for i in items]}
+        state_lookup = {str(s.get("id")): s for s in self._load_states()}
+        return {"tickets": [self._normalise_issue(i, state_lookup) for i in items]}
 
     def add_comment(self, ticket_id: str, comment: str) -> dict:
         err = self._missing_config()
@@ -265,14 +292,20 @@ class PlaneBackend(StateBackend):
         return self._state_cache
 
     @staticmethod
-    def _normalise_issue(issue: dict) -> dict:
+    def _normalise_issue(issue: dict, state_lookup: Optional[dict] = None) -> dict:
         """Normalise a Plane issue to the shape callers expect from read_ticket."""
+        state_id = issue.get("state")
+        status_name = ""
+        if state_id and state_lookup:
+            state = state_lookup.get(str(state_id)) or {}
+            status_name = state.get("name", "")
         return {
             "id": issue.get("id"),
             "ref": issue.get("sequence_id") or issue.get("ref"),
             "title": issue.get("name") or issue.get("title", ""),
             "description": issue.get("description_html") or issue.get("description_stripped") or "",
-            "status": issue.get("state"),
+            "status": state_id,
+            "status_name": status_name,
             "project": issue.get("project"),
             "assigned_to": issue.get("assignees") or issue.get("assigned_to"),
             "owner": issue.get("created_by") or issue.get("owner"),

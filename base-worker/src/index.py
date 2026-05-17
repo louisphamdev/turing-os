@@ -233,16 +233,18 @@ def main():
         # ── Create agent with checkpoint manager ────────────────────────────
         agent = create_agent(checkpoint_manager=cm)
 
-        # ── Read ticket from Taiga ────────────────────────────────────────
+        # ── Read ticket from active StateBackend (taiga | plane) ───────────
         log("Reading ticket information...")
-        from tools import taiga_tools
-        ticket = taiga_tools.read_ticket(TICKET_ID)
+        from tools import state_backend
+        backend = state_backend.get_backend()
+        log(f"Using state backend: {backend.name}")
+        ticket = backend.read_ticket(TICKET_ID)
 
         task_description = ticket.get('description', '') or ticket.get('title', 'No task description')
         log(f"Task: {task_description[:200]}...")
 
         # ── Update ticket to IN_PROGRESS ──────────────────────────────────
-        taiga_tools.update_ticket_status(TICKET_ID, 'IN_PROGRESS', 'Worker started processing')
+        backend.update_ticket_status(TICKET_ID, 'IN_PROGRESS', 'Worker started processing')
 
         # ── Start health monitoring ────────────────────────────────────────
         health = start_health_monitor(TICKET_ID, ROLE)
@@ -290,7 +292,7 @@ def main():
 
         elif result == 'blocked':
             log("✗ Task is blocked, waiting for human intervention")
-            taiga_tools.update_ticket_status(
+            backend.update_ticket_status(
                 TICKET_ID, 'BLOCKED',
                 'Task blocked — awaiting human intervention'
             )
@@ -301,7 +303,7 @@ def main():
 
         elif result == 'max_iterations':
             log("⚠ Max iterations reached without completion", 'WARN')
-            taiga_tools.update_ticket_status(
+            backend.update_ticket_status(
                 TICKET_ID, 'BLOCKED',
                 f'Max iterations ({agent.max_iterations}) reached. Task may need human review.'
             )
@@ -426,8 +428,8 @@ You have access to Taiga/Plane (tickets), BookStack (documentation), and termina
 
         # Try to mark ticket as blocked
         try:
-            from tools import taiga_tools
-            taiga_tools.update_ticket_status(
+            from tools import state_backend
+            state_backend.get_backend().update_ticket_status(
                 TICKET_ID, 'BLOCKED',
                 f'Worker error: {str(e)[:500]}'
             )
