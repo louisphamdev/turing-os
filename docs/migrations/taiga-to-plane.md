@@ -1,8 +1,17 @@
 # Migration Spec: Taiga → Plane
 
-Status: APPROVED — not yet started.
+Status: IN PROGRESS — Phase 0+1+2+2.5 completed 2026-05-17.
 Author: audit pass, 2026-05-16. Decisions chốt 2026-05-17.
 Estimated effort: 6–10 working days (includes new inventory step).
+
+## Progress
+
+- [x] Phase 0 — Spike (skeleton stack added under `--profile plane`).
+- [x] Phase 1 — `StateBackend` ABC + `TaigaBackend` + `PlaneBackend` skeleton.
+- [x] Phase 2 — `PlaneBackend` body implemented against Plane CE REST API.
+- [x] Phase 2.5 — External Taiga readers inventory (see `taiga-readers-inventory.md`).
+- [ ] Phase 3 — Cutover (requires real Plane CE container + shadow-run).
+- [ ] Phase 4 — Cleanup (delete `taiga-*` services + scripts).
 
 ## Decisions locked in (2026-05-17)
 

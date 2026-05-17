@@ -1,8 +1,20 @@
 # Migration Spec: Matrix/Synapse → NATS
 
-Status: APPROVED — not yet started.
+Status: IN PROGRESS — Phase 0+1+2 completed 2026-05-17.
 Author: audit pass, 2026-05-16. Decisions chốt 2026-05-17.
 Estimated effort: 5–8 working days of focused work.
+
+## Progress
+
+- [x] Phase 0 — Add `nats:2.10-alpine` JetStream container (internal-only).
+- [x] Phase 1 — Orchestrator dual-publish to NATS (best-effort, opt-in).
+- [x] Phase 2 — Worker subscribes to `turing.worker.any.<ticket>.inbox`
+      (opt-in via `WORKER_NATS_SUBSCRIBE=true`). HTTP polling stays as
+      fallback; messages deduplicated by eventId across paths.
+- [ ] Phase 3 — Orchestrator stops publishing admin chatter to worker Matrix
+      rooms; only Element-visible audit room remains on Matrix.
+- [ ] Phase 4 — Remove HTTP polling path from workers + tear down per-worker
+      Matrix room creation. Element + Synapse stay for admin chat only.
 
 ## Decisions locked in (2026-05-17)
 

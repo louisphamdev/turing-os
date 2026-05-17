@@ -1,39 +1,45 @@
+"""Unit tests for the ToolRegistry class."""
+
 import pytest
 from src.tools.tool_registry import ToolRegistry
 
-def test_tool_registry_registration():
+
+def test_tool_registry_register_local():
+    """register_local stores a function in local_tools without touching BookStack."""
     registry = ToolRegistry()
-    
+
     def dummy_tool():
         """Dummy description."""
         pass
-        
-    registry.register("dummy", dummy_tool, "Dummy description.")
-    
-    tools = registry.get_all_tools()
-    assert "dummy" in tools
-    assert tools["dummy"]["description"] == "Dummy description."
 
-def test_tool_registry_unregistration():
+    result = registry.register_local("dummy", dummy_tool, share=False)
+
+    assert result["success"] is True
+    assert "dummy" in registry.local_tools
+    assert registry.local_tools["dummy"] is dummy_tool
+
+
+def test_tool_registry_unregister_removes_local():
+    """unregister_tool removes from local_tools (and wiki_tools if present)."""
     registry = ToolRegistry()
-    
+
     def dummy_tool():
         pass
-        
-    registry.register("dummy", dummy_tool, "desc")
-    registry.unregister("dummy")
-    
-    tools = registry.get_all_tools()
-    assert "dummy" not in tools
 
-def test_tool_registry_get_tool():
+    registry.register_local("dummy", dummy_tool, share=False)
+    assert "dummy" in registry.local_tools
+
+    result = registry.unregister_tool("dummy", delete_from_wiki=False)
+    assert result["success"] is True
+    assert "dummy" not in registry.local_tools
+
+
+def test_tool_registry_register_local_is_callable():
+    """A registered function remains directly callable from local_tools."""
     registry = ToolRegistry()
-    
-    def dummy_tool(x):
+
+    def double(x):
         return x * 2
-        
-    registry.register("dummy", dummy_tool, "desc")
-    
-    tool = registry.get_tool("dummy")
-    assert tool is not None
-    assert tool(5) == 10
+
+    registry.register_local("double", double, share=False)
+    assert registry.local_tools["double"](5) == 10

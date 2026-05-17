@@ -326,12 +326,38 @@ def main():
 You are chatting with a user (admin) via Matrix. Be conversational and helpful.
 When the user asks you to do something, use tools to accomplish the task.
 Always respond in a friendly manner.
-You have access to Taiga (tickets), Wiki.js (documentation), and terminal commands."""
+You have access to Taiga/Plane (tickets), BookStack (documentation), and terminal commands."""
+
+            # ── Optional NATS subscriber (Phase 2 dual-read) ────────────────
+            # When WORKER_NATS_SUBSCRIBE=true and nats-py is available, the
+            # worker also drains an in-memory NATS inbox queue alongside the
+            # HTTP poll. Messages are deduplicated by eventId across paths.
+            from tools import nats_client
+            nats_subscriber = nats_client.start_subscriber(TICKET_ID, ROLE)
+            if nats_subscriber:
+                log("[Interactive] NATS subscribe ACTIVE (dual-read)")
+            seen_event_ids: set = set()
+
+            def _ingest_message(msg: dict) -> bool:
+                event_id = str(msg.get('eventId') or msg.get('event_id') or '')
+                if event_id and event_id in seen_event_ids:
+                    return False
+                if event_id:
+                    seen_event_ids.add(event_id)
+                    if len(seen_event_ids) > 2048:
+                        # Bounded set — drop arbitrary half.
+                        for _victim in list(seen_event_ids)[:1024]:
+                            seen_event_ids.discard(_victim)
+                return True
 
             # Interactive loop: poll inbox → process → reply
             while True:
-                admin_messages = poll_admin_inbox()
+                admin_messages = list(poll_admin_inbox())
+                if nats_subscriber:
+                    admin_messages.extend(nats_subscriber.drain_inbox())
                 for msg in admin_messages:
+                    if not _ingest_message(msg):
+                        continue
                     sender = msg.get('sender', 'admin')
                     content = msg.get('content', '')
                     is_command = msg.get('isStructuredCommand', False)

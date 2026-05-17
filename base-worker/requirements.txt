@@ -2,6 +2,9 @@
 requests>=2.31.0
 httpx>=0.26.0
 
+# Messaging (optional — Phase 2 NATS subscribe, opt-in via WORKER_NATS_SUBSCRIBE)
+nats-py>=2.7.0
+
 # LLM Providers
 openai>=1.12.0
 anthropic>=0.18.0

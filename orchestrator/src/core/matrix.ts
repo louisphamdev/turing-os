@@ -278,8 +278,10 @@ export class MatrixService {
 
   /**
    * Send a message to a specific worker's Matrix room.
-   * Also mirrors to NATS turing.worker.*.<ticket>.inbox when NATS_ENABLED=true
-   * (phase 1 of the Matrix->NATS migration; workers still read from Matrix).
+   * Note: messages in the worker's Matrix room are admin-visible; workers
+   * themselves consume admin->worker traffic via the HTTP inbox or NATS
+   * (see pushToWorkerInbox). We mirror this to a separate audit subject so
+   * the worker-bound NATS inbox is not polluted with admin-only chatter.
    */
   async sendToWorkerRoom(ticketId: string, message: string): Promise<boolean> {
     const roomId = this.workerToRoom.get(ticketId);
@@ -288,8 +290,10 @@ export class MatrixService {
       return false;
     }
     if (natsService.isEnabled()) {
-      const subject = NatsService.workerSubject('any', ticketId, 'inbox');
-      natsService.publish(subject, { ticketId, message, ts: Date.now() }).catch(() => undefined);
+      const subject = NatsService.workerSubject('any', ticketId, 'event');
+      natsService
+        .publish(subject, { ticketId, direction: 'orchestrator-to-room', message, ts: Date.now() })
+        .catch(() => undefined);
     }
     return this._sendToRoom(roomId, message);
   }
@@ -358,14 +362,23 @@ export class MatrixService {
     if (!this.workerInbox.has(ticketId)) {
       this.workerInbox.set(ticketId, []);
     }
-    this.workerInbox.get(ticketId)!.push({
+    const message: InboxMessage = {
       sender,
       content,
       timestamp: Date.now(),
       eventId: eventId || `evt_${Date.now()}`,
-    });
+    };
+    this.workerInbox.get(ticketId)!.push(message);
     this.clearPendingQuestion(ticketId);
     console.log(`[Matrix] Inbox: queued message for worker ${ticketId} from ${sender}`);
+
+    // Phase 2: dual-publish to NATS so workers with WORKER_NATS_SUBSCRIBE=true
+    // can consume admin->worker traffic without HTTP polling. HTTP inbox is
+    // still the source of truth — NATS is best-effort, fire-and-forget.
+    if (natsService.isEnabled()) {
+      const subject = NatsService.workerSubject('any', ticketId, 'inbox');
+      natsService.publish(subject, message).catch(() => undefined);
+    }
   }
 
   /**
@@ -376,7 +389,7 @@ export class MatrixService {
       this.workerInbox.set(ticketId, []);
     }
 
-    const commandMessage = {
+    const commandMessage: InboxMessage = {
       sender,
       content: `[COMMAND] ${JSON.stringify(command)}`,
       timestamp: Date.now(),
@@ -389,6 +402,12 @@ export class MatrixService {
     this.workerInbox.get(ticketId)!.push(commandMessage);
     this.clearPendingQuestion(ticketId);
     console.log(`[Matrix] Inbox: queued COMMAND ${command.type} for worker ${ticketId}`);
+
+    // Phase 2: dual-publish to NATS (see pushToWorkerInbox for rationale).
+    if (natsService.isEnabled()) {
+      const subject = NatsService.workerSubject('any', ticketId, 'inbox');
+      natsService.publish(subject, commandMessage).catch(() => undefined);
+    }
   }
 
   /**

@@ -71,6 +71,14 @@ export class DockerService {
       `SYNAPSE_API_URL=${config.matrix.apiUrl}`,
       `MATRIX_ROOM_ID=${roomId || ''}`,
       `WORKSPACE_PATH=/workspace`,
+      // Phase 2 migration env — propagate so workers can opt-in to NATS / Plane.
+      `STATE_BACKEND=${process.env.STATE_BACKEND || 'taiga'}`,
+      `PLANE_API_URL=${process.env.PLANE_API_URL || ''}`,
+      `PLANE_API_TOKEN=${process.env.PLANE_API_TOKEN || ''}`,
+      `PLANE_WORKSPACE_SLUG=${process.env.PLANE_WORKSPACE_SLUG || ''}`,
+      `PLANE_PROJECT_ID=${process.env.PLANE_PROJECT_ID || ''}`,
+      `NATS_URL=${process.env.NATS_URL || 'nats://nats:4222'}`,
+      `WORKER_NATS_SUBSCRIBE=${process.env.WORKER_NATS_SUBSCRIBE || 'false'}`,
     ];
 
     // Gateway mode: inject consumer token instead of real API keys
