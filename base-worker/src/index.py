@@ -69,46 +69,97 @@ def create_agent(checkpoint_manager=None):
     else:
         agent = OpenAIAgent(**kwargs)
 
-    # ─── Load skills from skills.sh on startup ────────────────────────────
+    # ─── Load methodology skills (local corpus) into the system prompt ────
     _load_startup_skills(agent, ROLE)
 
     return agent
 
 
+# Role → superpowers methodology skill files. These are the TERSE
+# Turing-flavored translations living in base-worker/skills/<name>.md and are
+# the SINGLE source of execution discipline (BMAD + remote skill fetch removed).
+ROLE_METHODOLOGY = {
+    'po': ['brainstorming', 'writing-plans'],
+    'ba': ['brainstorming', 'writing-plans'],
+    # PM gets planning + conceptual review/fan-out guidance (orchestrator-mediated;
+    # subagent mechanics are intentionally NOT part of the worker skill prose).
+    'pm': ['writing-plans'],
+    'software-engineer': [
+        'test-driven-development',
+        'systematic-debugging',
+        'verification-before-completion',
+        'receiving-code-review',
+    ],
+    # Language / spec dev workers share the software-engineer discipline.
+    'data': [
+        'test-driven-development',
+        'systematic-debugging',
+        'verification-before-completion',
+        'receiving-code-review',
+    ],
+    'devops': [
+        'test-driven-development',
+        'systematic-debugging',
+        'verification-before-completion',
+        'receiving-code-review',
+    ],
+    'security': [
+        'test-driven-development',
+        'systematic-debugging',
+        'verification-before-completion',
+        'receiving-code-review',
+    ],
+    'network': [
+        'test-driven-development',
+        'systematic-debugging',
+        'verification-before-completion',
+        'receiving-code-review',
+    ],
+    'qa': ['verification-before-completion', 'requesting-code-review'],
+    'doctor': ['systematic-debugging', 'verification-before-completion'],
+    'hr': ['brainstorming', 'writing-plans'],
+}
+
+# Fallback for unknown roles (incl. the literal 'default' role).
+DEFAULT_METHODOLOGY = [
+    'test-driven-development',
+    'systematic-debugging',
+    'verification-before-completion',
+]
+
+
+def _methodology_skills_for_role(role: str) -> list:
+    """Map a worker role to its methodology skill file names (per spec)."""
+    return ROLE_METHODOLOGY.get((role or '').lower(), DEFAULT_METHODOLOGY)
+
+
 def _load_startup_skills(agent, role: str):
     """
-    Load default skills from skills.sh based on role.
-    Called during worker startup.
+    Load the role's methodology skills from the LOCAL corpus
+    (base-worker/skills/<name>.md) and stash their bodies on
+    agent.context['methodology'] so _build_system_prompt can inject a terse
+    "## Methodology (mandatory gates)" section.
+
+    Robust if a skill file is missing: it is skipped + logged, the worker
+    still boots. No network (remote skill fetch removed).
     """
-    # Default skills mapping by role
-    role_skills = {
-        'software-engineer': 'python,javascript,git,docker,sql',
-        'po': 'product-management,agile,jira',
-        'pm': 'project-management,scrum,asana',
-        'hr': 'recruiting,onboarding,hr-software',
-        'qa': 'testing,selenium,jest,cypress',
-        'devops': 'docker,kubernetes,terraform,ci-cd',
-        'ba': 'data-analysis,sql,excel',
-        'data': 'python,sql,pandas,jupyter',
-        'security': 'security-audit,owasp,pen-testing',
-        'network': 'networking,dns,tcp-ip',
-        'doctor': 'medical-knowledge,diagnostics',
-    }
+    skill_names = _methodology_skills_for_role(role)
+    log(f"[Startup] Methodology skills for role '{role}': {', '.join(skill_names)}")
 
-    skills_to_load = role_skills.get(role.lower())
-    if not skills_to_load:
-        skills_to_load = 'python,javascript,git'
-
-    log(f"[Startup] Loading skills for role '{role}': {skills_to_load}")
-
+    methodology = []
     try:
-        from tools.research_tools import load_skills_for_task_sync
-        result = load_skills_for_task_sync(skills_to_load)
-        loaded = result.get('loaded', 0)
-        total = result.get('total', 0)
-        log(f"[Startup] ✓ Loaded {loaded}/{total} skills for role '{role}'")
+        from tools.research_tools import load_skill_file
+        for name in skill_names:
+            body = load_skill_file(name)
+            if body:
+                methodology.append({'name': name, 'body': body.strip()})
+            else:
+                log(f"[Startup] ⚠ Methodology skill missing (skipped): {name}.md", 'WARN')
     except Exception as e:
-        log(f"[Startup] ⚠ Failed to load skills: {e}", 'WARN')
+        log(f"[Startup] ⚠ Failed to load methodology skills: {e}", 'WARN')
+
+    agent.context['methodology'] = methodology
+    log(f"[Startup] ✓ Loaded {len(methodology)}/{len(skill_names)} methodology skills for role '{role}'")
 
 
 # ─── Orchestrator-Based Admin Communication ────────────────────────────────

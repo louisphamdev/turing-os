@@ -191,89 +191,48 @@ See `.env.example` for the full list.
 
 Legend: ✅ Shipped · 🧪 Experimental · 🗺️ Roadmap
 
-Current snapshot: Matrix HITL, worker health, priority routing, role loading, and BMAD workflow integration are **shipped** (✅). Doctor diagnostics, auto-scaling, PM failover, and timeout/escalation are **experimental** (🧪) — see the notes in the sections above. Doctor's gateway-routed knowledge base / escalation and orchestrator-mediated fix execution (allow-listed `POST /remediation`) are **implemented and unit-tested but pending live-stack verification**. Full PO→PM→HR→Workers delegation at ticket intake and retro reports remain **roadmap** items (🗺️).
+Current snapshot: Matrix HITL, worker health, priority routing, role loading, and the bundled methodology gates are **shipped** (✅). Doctor diagnostics, auto-scaling, PM failover, and timeout/escalation are **experimental** (🧪) — see the notes in the sections above. Doctor's gateway-routed knowledge base / escalation and orchestrator-mediated fix execution (allow-listed `POST /remediation`) are **implemented and unit-tested but pending live-stack verification**. Full PO→PM→HR→Workers delegation at ticket intake and retro reports remain **roadmap** items (🗺️).
 
 ---
 
-## 🤖 BMAD Integration
+## 🧭 Development Methodology
 
-Turing OS integrates with **BMAD (Breakthrough Method for Agile AI Driven Development)** to provide structured development workflows.
-
-### What is BMAD?
-
-BMAD is an AI-driven development framework with **46k+ GitHub stars** providing:
-- **Structured Workflows**: PRD → Architecture → Stories → Dev → QA gate
-- **Specialized Agents**: 12+ domain experts (PM, Architect, Developer, UX, QA)
-- **Scale-Adaptive**: Automatically adjusts planning depth to project complexity
-- **Skills System**: Reusable skill modules for agents
-
-### Integration Components
-
-| Component | Description |
-|-----------|-------------|
-| **BMAD Workflow Templates** | Structured PRD, architecture, and story templates for PO |
-| **BMAD Skills Registry** | Development, QA, and review skills for workers |
-| **BMAD Agent Patterns** | Reference templates for specialized agent roles |
-
-### BMAD Workflow in Turing OS
+Turing OS follows the **superpowers** methodology as its single source of execution discipline across every role. The same gate sequence applies whether a request is being scoped, planned, implemented, or reviewed:
 
 ```
-Stakeholder Request
-       ↓
-   [PO] ← BMAD PRD Template
-   - Verify project (existing/new)
-   - Use BMAD structured requirements
-   - Confirm all details
-       ↓
-   [PO] ← BMAD Architecture Phase
-   - System design using BMAD templates
-   - Component specifications
-       ↓
-   [PO] ← BMAD Stories Phase
-   - Break into user stories
-   - Acceptance criteria (Given/When/Then)
-       ↓
-   [PM] ← Receives READY task
-   - Create execution plan
-   - Assign to workers
-       ↓
-   [Workers] ← BMAD Dev Standards
-   - Load relevant skills
-   - Follow BMAD development checklist
-       ↓
-   [QA] ← BMAD QA Gate
-   - Risk-based testing
-   - Quality validation
+brainstorm → plan → TDD → systematic-debugging → verification-before-completion → code-review
 ```
 
-### Using BMAD in Turing OS
+### Bundled methodology gates
 
-**PO can use BMAD templates:**
-```markdown
-# BMAD PRD Template - Use when creating new tasks
-## Business Context
-## Goals & Success Metrics
-## Users & Stakeholders
-## Requirements (Functional/Non-Functional)
-## Constraints
-## Risks & Mitigations
-## Acceptance Criteria
-```
+The discipline ships as a small set of bundled, role-loaded skill files under `base-worker/skills/`. These are terse, worker-toolset translations of the superpowers skills — there is no external registry to fetch and no runtime download:
 
-**Workers can load BMAD skills:**
-```python
-# Load BMAD development skills + language-specific skills
-TOOL_CALL: load_skills_for_task
-ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
-```
+| Gate | Purpose |
+|------|---------|
+| `brainstorming.md` | Explore intent, requirements, and design before any creative work |
+| `writing-plans.md` | Turn a spec into a written, step-by-step plan before touching code |
+| `test-driven-development.md` | Write the failing test first, then the implementation |
+| `systematic-debugging.md` | Diagnose before patching any bug, failure, or surprise |
+| `verification-before-completion.md` | Run verification and confirm output before claiming done |
+| `requesting-code-review.md` / `receiving-code-review.md` | Request and act on review with technical rigor |
 
-### Resources
+### Role → gate mapping
 
-| Resource | Link |
-|----------|------|
-| BMAD Documentation | https://docs.bmad-method.org/ |
-| BMAD GitHub | https://github.com/bmad-code-org/BMAD-METHOD |
-| Integration Guide | [docs/bmad-integration.md](docs/bmad-integration.md) |
+Each role loads only the gates relevant to its job:
+
+| Role | Gates |
+|------|-------|
+| PO / BA / HR | brainstorming, writing-plans |
+| PM | writing-plans (plus orchestrator-mediated review checkpoints) |
+| Software / language / spec workers (data, devops, security, network) | test-driven-development, systematic-debugging, verification-before-completion, receiving-code-review |
+| QA | verification-before-completion, requesting-code-review |
+| Doctor | systematic-debugging, verification-before-completion |
+
+Workers never talk peer-to-peer: any code-review or cross-worker flow is relayed Worker → PM → Worker.
+
+### Attribution
+
+The bundled gates are terse translations of the **superpowers** methodology by [obra/superpowers](https://github.com/obra/superpowers) — MIT License, © 2025 Jesse Vincent. See `base-worker/skills/NOTICE` for full attribution.
 
 ---
 

@@ -30,6 +30,12 @@ You are a code review specialist agent for Project Turing OS. You provide expert
 - Intent parser logic validation
 - Project convention enforcement
 
+> **Methodology:** This agent is the home of the superpowers
+> `requesting-code-review` / `receiving-code-review` discipline (the worker-facing
+> translations live in `base-worker/skills/`). Worker reviews are relayed
+> Worker → PM → Worker — never peer-to-peer. See `CLAUDE.md` → *Development
+> methodology*.
+
 ## Context
 
 Project Turing OS is a multi-agent system with:

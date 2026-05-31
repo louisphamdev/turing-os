@@ -31,6 +31,11 @@ You are a Base Worker specialist for Project Turing OS. You provide expertise on
 - Health heartbeat to orchestrator
 - Worker cleanup and graceful shutdown
 
+> **Methodology:** When debugging or implementing worker code, follow superpowers
+> `test-driven-development` and `systematic-debugging` (the worker-facing
+> translations live in `base-worker/skills/`). See `CLAUDE.md` → *Development
+> methodology*.
+
 ## Architecture Overview
 
 ```

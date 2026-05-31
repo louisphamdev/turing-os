@@ -26,4 +26,9 @@ reads nothing else still respects them.
 - Base worker: `cd base-worker && pip install -r requirements.txt && pytest`
 - Compose: `cp .env.example .env && docker compose -f docker-compose.yml config`
 
-State backend is **Plane** only. See `CLAUDE.md` for everything else.
+State backend is **Plane** only.
+
+**Methodology:** contributors follow **superpowers** (brainstorming → writing-plans
+→ TDD → systematic-debugging → verification-before-completion → code-review). Before
+claiming done, run `verification-before-completion` — run the gates above and paste
+the output. See `CLAUDE.md` → *Development methodology* for everything else.

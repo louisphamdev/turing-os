@@ -141,42 +141,48 @@ When PM requests new engineer:
 HR researches when:
 - Required tech stack not in existing JD cache
 - New framework/language mentioned in ticket
-- Technology is unfamiliar (check via skills.sh + context7)
+- Technology is unfamiliar (research via Context7)
 - Previous JD for similar role got negative feedback
 
-### Research Process (Using skills.sh + Context7)
+### Authoring JDs — Methodology Gates
+
+Authoring a JD is creative work, so it runs through this role's auto-loaded gates:
+
+- **`brainstorming`** — at the start, before writing any JD. Explore what the role
+  really needs: surface the true skill requirements, ambiguities in the ticket, and
+  design options for the specialization. Do not jump straight to a JD draft.
+- **`writing-plans`** — when authoring the JD itself. The JD is the plan for the
+  worker: structure it concretely (required skills, task context, tools, success
+  criteria) so the spawned engineer can execute without re-deriving intent.
+
+### Research Process (Using Context7)
 
 ```
 When research needed:
-1. LOAD skills from skills.sh: "load_skills_for_task" with relevant tech stack
-2. RESEARCH with Context7: "research_with_context7" for framework documentation
+1. RESEARCH with Context7: fetch framework documentation
    - Use resolve_library_id to find correct library
    - Get specific topic docs (authentication, hooks, etc.)
-3. SEARCH BookStack for: existing documentation on [technology]
-4. SYNTHESIZE: Combine research findings
-5. WRITE: Create JD with researched tools and practices
-6. VALIDATE: Ensure JD is consistent with base software-engineer.md
-7. STORE: Save to JD_CACHE with metadata
+2. SEARCH BookStack for: existing documentation on [technology]
+3. SYNTHESIZE: Combine research findings
+4. WRITE: apply `writing-plans` to create the JD with researched tools and practices
+5. VALIDATE: Ensure JD is consistent with base software-engineer.md
+6. STORE: Save to JD_CACHE with metadata
 ```
 
-### Skills.sh + Context7 Integration
+### Context7 Integration
 
-HR uses these tools to prepare optimal JDs:
+HR uses Context7 to prepare optimal JDs:
 
 ```python
-# 1. Load skills for the required tech stack
-skills = await load_skills_for_task("java,springboot,postgres,redis")
-
-# 2. Research unfamiliar frameworks with Context7
+# 1. Research unfamiliar frameworks/tech stack with Context7
 docs = await research_with_context7("spring-boot", topic="security")
 docs = await research_with_context7("/mongodb/mongodb-driver-java")
 
-# 3. Compose complete JD with up-to-date knowledge
+# 2. Compose complete JD with up-to-date knowledge (apply writing-plans)
 jd = {
     "base": software-engineer.md,
     "language": languages/java.md,
     "specialization": specializations/backend.md,
-    "skills_sh": skills,
     "context7_research": docs
 }
 ```
@@ -250,9 +256,13 @@ RESOURCE MANAGEMENT RULES:
 KNOWLEDGE MANAGEMENT RULES:
 1. ALWAYS check JD_CACHE before researching new specialization
 2. If similar JD exists → retrieve, adapt, use (no research needed)
-3. If new tech/framework → research via web_search + BookStack
+3. If new tech/framework → research via web_search + Context7 + BookStack
 4. After task completion → log feedback to JD_CACHE
 5. Continuously optimize JD based on execution feedback
+
+METHODOLOGY GATES (auto-loaded — follow by name):
+- Before writing a JD → brainstorming (clarify what the role truly needs)
+- Writing the JD → writing-plans (concrete, executable spec for the worker)
 
 When handling tickets:
 1. First: Check JD_CACHE for similar role

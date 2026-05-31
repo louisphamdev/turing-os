@@ -161,3 +161,22 @@ Roles: `software-engineer`, `qa`, `devops`, `data`, `security`, `hr`, `pm`,
 - Worker is Python 3.12; lint via `py_compile` and test with `pytest`.
 - Plane is the only state backend — do not reintroduce other backends.
 - When changing build/test commands here, also update `.github/workflows/ci.yml`.
+
+## Development methodology
+
+Contributors follow **superpowers** as the single source of execution discipline:
+brainstorming → writing-plans → test-driven-development → systematic-debugging →
+verification-before-completion → code-review. Install it as a Claude Code plugin
+(`/plugin install superpowers@claude-plugins-official`) or use the team's vendored
+copy. Methodology source: [obra/superpowers](https://github.com/obra/superpowers)
+(MIT, © 2025 Jesse Vincent).
+
+The runtime workers do **not** run superpowers directly — they follow a terse,
+tool-mapped translation bundled at `base-worker/skills/` (see its `NOTICE` for
+attribution). Superpowers is the contributor methodology; the bundled skills are
+the worker-facing equivalents.
+
+**Before claiming done, run `verification-before-completion`:** run the gates for
+what you touched (`npx tsc --noEmit` + `npm test` in `orchestrator/`, `pytest` in
+`base-worker/`, `docker compose config` for compose changes) and paste the actual
+output. Evidence before assertions — never claim "passing" without showing it.

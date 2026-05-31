@@ -1,0 +1,29 @@
+Methodology source / attribution
+=================================
+
+The worker methodology skills in this directory:
+
+  brainstorming.md
+  writing-plans.md
+  test-driven-development.md
+  systematic-debugging.md
+  verification-before-completion.md
+  requesting-code-review.md
+  receiving-code-review.md
+
+are TERSE, Turing-flavored translations of skills from the "superpowers"
+project by Jesse Vincent (obra/superpowers):
+
+  https://github.com/obra/superpowers
+  MIT License, Copyright (c) 2025 Jesse Vincent
+
+superpowers is the single source of execution discipline for the Turing OS
+multi-agent workflow. These translations adapt the original skills to the
+worker toolset (read_file, write_file, execute_terminal_command, ticket and
+document tools) and drop Claude-Code-only mechanics (the Skill tool, TodoWrite,
+git worktrees, plan-mode, and subagent/parallel-dispatch). All cross-worker
+flow (e.g. code review) is relayed Worker -> PM -> Worker; workers never
+communicate peer-to-peer.
+
+The methodology and structure originate with superpowers; credit for that
+work belongs to Jesse Vincent under the MIT License above.

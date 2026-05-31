@@ -360,7 +360,7 @@ PM breaks:
 
 **HiClaw:**
 - Generic Worker roles (OpenClaw/QwenPaw/Hermes)
-- Skills from skills.sh (80,000+ community skills)
+- Skills pulled from a generic community registry
 - No domain-specific JD
 - Skills loaded at runtime from community
 
@@ -414,7 +414,7 @@ Specialization Skills:
 | **Deadlock** | Manual fix | PM auto-detect/break | Prevented |
 | **Bug Resolution** | GitHub issue | Doctor agent | User-friendly |
 | **Communication** | Peer-to-peer | PM-centralized | No loops |
-| **Skills** | Generic + skills.sh | Domain-specific JD | Better matching |
+| **Skills** | Generic community registry | Domain-specific JD + superpowers gates | Better matching |
 | **Retro Reports** | ❌ None | ✅ PM creates | Continuous learning |
 | **Escalation** | Manual human | Auto → PO | SLA-bound |
 | **Security** | Gateway holds keys | Keys in BookStack | Better isolation |
@@ -442,8 +442,8 @@ Specialization Skills:
    - Turing OS: Can add K8s support via Helm
    - Our architecture is K8s-ready
 
-5. **Skills.sh Integration** (80,000+ skills)
-   - Turing OS: We ALSO use skills.sh!
+5. **Community Skill Registry** (large generic catalog)
+   - Turing OS: We bundle our own role methodology gates (the superpowers gate sequence) instead of pulling from a generic registry
    - Plus we have Context7 for up-to-date docs
    - Plus domain-specific JD files
 

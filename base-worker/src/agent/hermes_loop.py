@@ -330,9 +330,44 @@ class HermesAgent:
         print(f"[Hermes] Max iterations ({self.max_iterations}) reached")
         return 'max_iterations'
 
+    def _build_methodology_section(self) -> str:
+        """Build the terse '## Methodology (mandatory gates)' section.
+
+        Sourced from agent.context['methodology'] — a list of
+        {'name', 'body'} dicts loaded at startup from the LOCAL skills corpus
+        (base-worker/skills/<name>.md), per the worker's role. Returns '' when
+        no methodology was loaded so the worker still boots and runs.
+        """
+        methodology = self.context.get('methodology') or []
+        if not methodology:
+            return ""
+
+        blocks = []
+        for skill in methodology:
+            if isinstance(skill, dict):
+                name = skill.get('name', 'skill')
+                body = (skill.get('body') or '').strip()
+            else:
+                name = 'skill'
+                body = str(skill).strip()
+            if not body:
+                continue
+            blocks.append(f"### {name}\n{body}")
+
+        if not blocks:
+            return ""
+
+        joined = "\n\n".join(blocks)
+        return (
+            "## Methodology (mandatory gates)\n"
+            "These are non-negotiable execution gates for your role. Follow them.\n\n"
+            f"{joined}\n\n"
+        )
+
     def _build_system_prompt(self) -> str:
         """Build the system prompt with available tools"""
         tools_schema = self._build_tools_schema()
+        methodology_section = self._build_methodology_section()
 
         return f"""You are Hermes, an AI agent that executes tasks by calling tools.
 
@@ -340,18 +375,9 @@ class HermesAgent:
 - Ticket ID: {self.ticket_id}
 - Role: {self.role}
 
-## MANDATORY: Skill Loading Before Task Execution
+{methodology_section}## Research
 
-⚠️ BEFORE STARTING ANY TASK, you MUST load relevant skills:
-
-```
-TOOL_CALL: load_skills_for_task
-ARGUMENTS: {{"skill_names": "python,fastapi,sql"}}
-```
-
-Replace skill names with the actual skills needed for your task.
-
-⚠️ If you encounter unfamiliar frameworks, use context7 to research:
+⚠️ If you encounter unfamiliar frameworks/SDKs, use context7 to research:
 
 ```
 TOOL_CALL: research_with_context7

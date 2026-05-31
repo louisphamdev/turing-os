@@ -9,6 +9,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy source code
 COPY src/ ./src/
 
+# Copy the methodology skill corpus (superpowers-derived gates) so the worker
+# can inject role gates into its system prompt at runtime. Lands at
+# /workspace/src/skills, matched by the loader's <file>/../skills candidate.
+COPY skills/ ./src/skills/
+
 # Copy crontab and entrypoint
 COPY crontab /workspace/crontab
 COPY docker-entrypoint.sh /docker-entrypoint.sh

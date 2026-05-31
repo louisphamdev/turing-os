@@ -22,9 +22,11 @@ This file registers custom agents for Project Turing OS.
 | `rbac-permissions` | [.github/skills/rbac-permissions/SKILL.md](.github/skills/rbac-permissions/SKILL.md) | RBAC: role permissions, access control |
 | `gateway-proxy` | [.github/skills/gateway-proxy/SKILL.md](.github/skills/gateway-proxy/SKILL.md) | Gateway: vault, consumer tokens, BookStack |
 | `docker-workflow` | [.github/skills/docker-workflow/SKILL.md](.github/skills/docker-workflow/SKILL.md) | Docker: container management, health, scaling |
-| `testing` | [.github/skills/testing/SKILL.md](.github/skills/testing/SKILL.md) | Testing: Jest, pytest, syntax validation |
+| `testing` | [.github/skills/testing/SKILL.md](.github/skills/testing/SKILL.md) | Testing: project commands (Jest, pytest, compose); defers to superpowers TDD |
 | `research-tools` | [.github/skills/research-tools/SKILL.md](.github/skills/research-tools/SKILL.md) | Context7: tech research, documentation fetching |
 | `credential-vault` | [.github/skills/credential-vault/SKILL.md](.github/skills/credential-vault/SKILL.md) | Credential vault: env-imported secrets, gateway proxy |
+| `doctor` | [.github/skills/doctor/SKILL.md](.github/skills/doctor/SKILL.md) | Doctor: diagnostics, orchestrator-mediated self-healing, incidents |
+| `doctor-tools-guide` | [.github/skills/doctor-tools-guide/SKILL.md](.github/skills/doctor-tools-guide/SKILL.md) | Doctor: allow-listed remediation, cross-worker tools via orchestrator |
 
 ## Usage
 
@@ -46,9 +48,11 @@ This file registers custom agents for Project Turing OS.
 /rbac-permissions               # Role permissions & access
 /gateway-proxy                  # Vault & consumer tokens
 /docker-workflow                # Container management
-/testing                        # Testing & validation
+/testing                        # Testing & validation (commands; defers to superpowers TDD)
 /research-tools                 # Tech research
 /credential-vault               # Secrets management
+/doctor                         # Diagnostics & self-healing
+/doctor-tools-guide             # Orchestrator-mediated remediation
 ```
 
 ### Global Instructions

@@ -111,5 +111,4 @@ Project Turing OS is a multi-agent system with:
 
 - `roles/security.md` — Security role definition
 - `orchestrator/src/core/rbac.ts` — RBAC implementation
-- `docs/bmad-integration.md` — Security best practices
 - `worker-communication-protocol.md` — Secure communication rules

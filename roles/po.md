@@ -65,7 +65,12 @@ When stakeholder submits a request:
 
 ### 3. Discussion & Confirmation with Stakeholder
 
-**PO must CONFIRM all details BEFORE handing off to PM:**
+**PO must CONFIRM all details BEFORE handing off to PM.**
+
+> **Gate: `brainstorming` (auto-loaded).** PO owns product/intent brainstorming.
+> At the CLARIFY/DISCUSS step, run this gate FIRST — explore the stakeholder's real
+> intent, requirements, and options before converging on scope. Do not write the
+> task until intent is genuinely understood, not assumed.
 
 ```
 Discussion Checklist:
@@ -84,7 +89,11 @@ NOT CONFIRMED = NOT HANDED OFF TO PM
 
 ### 4. Complete Task Creation
 
-**AFTER DISCUSSION, create a COMPLETE task:**
+**AFTER DISCUSSION, create a COMPLETE task.**
+
+> **Gate: `writing-plans` (auto-loaded).** At the COMPLETE-TASK / handoff-to-PM step,
+> apply this gate: the task document is the plan PM and workers execute from, so make
+> it concrete, unambiguous, and self-contained. Intent → structured spec before handoff.
 
 ```
 Task Document Structure:
@@ -301,6 +310,10 @@ OPERATIONAL MODEL:
 - Clarify requirements until ready for execution
 - Maintain single prioritized backlog
 - Hand off to PM only when FULLY READY
+
+METHODOLOGY GATES (auto-loaded — follow by name):
+- Clarify/discuss with stakeholder → brainstorming (you own product/intent brainstorming)
+- Complete task / handoff to PM → writing-plans (concrete, self-contained spec)
 
 KEY DIFFERENCE FROM PM:
 - PM manages HOW tasks get done

@@ -1,19 +1,31 @@
 """
-Research Tools - Skills.sh Loader and Context7 Integration
+Research Tools - Local Methodology Skill Loader and Context7 Integration
 
-MANDATORY: Every worker MUST load relevant skills from skills.sh before starting task.
-MANDATORY: Use context7 for technology research when unfamiliar frameworks/SDKs are encountered.
+Skill loading reads the Turing-flavored superpowers methodology skills from
+the LOCAL `base-worker/skills/<name>.md` corpus (no network). The old remote
+HTTP skill endpoint has been removed — it was dead and its failures were
+silently swallowed.
 
-Provides both async and sync wrappers so the synchronous Hermes agent loop can call them.
+Context7 research (research_with_context7) is unrelated to skills loading and
+is kept intact for technology/library doc lookups.
+
+Provides both async and sync wrappers so the synchronous Hermes agent loop can
+call them.
 """
 
 import os
 import asyncio
-from typing import Optional, Any
+from pathlib import Path
+from typing import Optional
 
 # Environment variables (injected at spawn time)
 CONTEXT7_API_KEY = os.environ.get('CONTEXT7_API_KEY', '')
-SKILLS_SH_BASE_URL = "https://skills.sh"
+
+# Optional override for the local skills corpus location. When unset the loader
+# probes a set of candidate dirs robust to both the dev checkout layout
+# (base-worker/skills) and the container runtime layout (/workspace/src → so
+# skills may live at /workspace/skills or /workspace/src/skills).
+SKILLS_DIR_ENV = 'WORKER_SKILLS_DIR'
 
 
 def _get_or_create_event_loop():
@@ -30,48 +42,89 @@ def _get_or_create_event_loop():
         return loop
 
 
-class SkillsLoader:
-    """Load skills from skills.sh before task execution."""
+def _candidate_skill_dirs() -> list[Path]:
+    """Candidate locations for the local methodology skills corpus.
 
-    def __init__(self):
-        self.base_url = SKILLS_SH_BASE_URL
-        self.timeout = 30
-        self._cache: dict[str, Any] = {}
+    Ordered by preference. Robust to:
+      - explicit override via WORKER_SKILLS_DIR
+      - dev checkout: base-worker/src/tools/research_tools.py → base-worker/skills
+      - container: /workspace/src/tools/research_tools.py → /workspace/skills
+        or /workspace/src/skills (depending on how skills/ is COPY'd into the image)
+      - cwd-relative ./skills as a last resort
+    """
+    here = Path(__file__).resolve()
+    candidates: list[Path] = []
 
-    async def load_skills(self, skill_names: list[str]) -> dict[str, Any]:
-        """Load skill modules from skills.sh"""
-        results = {}
+    override = os.environ.get(SKILLS_DIR_ENV)
+    if override:
+        candidates.append(Path(override))
 
-        for skill in skill_names:
-            if skill in self._cache:
-                print(f"[SkillsLoader] Using cached skill: {skill}")
-                results[skill] = self._cache[skill]
-                continue
+    # base-worker/skills (two parents up from src/tools/)
+    candidates.append(here.parents[2] / 'skills')
+    # /workspace/src/skills (one parent up from src/tools/ → src/skills)
+    candidates.append(here.parents[1] / 'skills')
+    # cwd-relative fallback
+    candidates.append(Path.cwd() / 'skills')
 
-            print(f"[SkillsLoader] Fetching skill: {skill}")
+    # De-dup preserving order.
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for c in candidates:
+        key = str(c)
+        if key not in seen:
+            seen.add(key)
+            unique.append(c)
+    return unique
 
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.get(
-                        f"{self.base_url}/api/skills/{skill}",
-                        headers={"Accept": "application/json"},
-                    )
 
-                    if response.status_code == 200:
-                        skill_data = response.json()
-                        self._cache[skill] = skill_data
-                        results[skill] = skill_data
-                        print(f"[SkillsLoader] ✓ Loaded skill: {skill}")
-                    else:
-                        print(f"[SkillsLoader] ✗ Failed: {skill} (HTTP {response.status_code})")
-                        results[skill] = {"error": f"HTTP {response.status_code}", "skill": skill}
+def resolve_skills_dir() -> Optional[Path]:
+    """Return the first existing candidate skills dir, or None if none exist."""
+    for d in _candidate_skill_dirs():
+        if d.is_dir():
+            return d
+    return None
 
-            except Exception as e:
-                print(f"[SkillsLoader] ✗ Error loading {skill}: {e}")
-                results[skill] = {"error": str(e), "skill": skill}
 
-        return results
+def load_skill_file(skill_name: str) -> Optional[str]:
+    """Read a single skill's markdown body from the local corpus.
+
+    Returns the file contents (str) or None if the skill file is missing /
+    unreadable. Never raises — a missing skill must NOT crash the worker.
+    """
+    name = skill_name.strip()
+    if not name:
+        return None
+    # Allow callers to pass either "writing-plans" or "writing-plans.md".
+    if name.endswith('.md'):
+        name = name[:-3]
+
+    for d in _candidate_skill_dirs():
+        path = d / f"{name}.md"
+        try:
+            if path.is_file():
+                return path.read_text(encoding='utf-8')
+        except Exception as e:  # pragma: no cover - defensive
+            print(f"[SkillsLoader] ✗ Error reading {path}: {e}")
+    print(f"[SkillsLoader] ✗ Skill not found in local corpus: {name}.md")
+    return None
+
+
+def load_skills(skill_names: list[str]) -> dict[str, Optional[str]]:
+    """Load multiple skill bodies from the local corpus.
+
+    Returns a dict {skill_name: body_or_None}. Missing skills map to None and
+    are logged but never raise.
+    """
+    results: dict[str, Optional[str]] = {}
+    for skill in skill_names:
+        name = skill.strip()
+        if not name:
+            continue
+        body = load_skill_file(name)
+        if body is not None:
+            print(f"[SkillsLoader] ✓ Loaded local skill: {name}")
+        results[name] = body
+    return results
 
 
 class Context7Client:
@@ -173,20 +226,21 @@ class Context7Client:
 
 
 # Global instances
-skills_loader: Optional[SkillsLoader] = None
 context7_client: Optional[Context7Client] = None
 
 
 def init_research_tools(context7_api_key: Optional[str] = None):
     """Initialize research tools with API keys."""
-    global skills_loader, context7_client
+    global context7_client
 
     api_key = context7_api_key or CONTEXT7_API_KEY
-
-    skills_loader = SkillsLoader()
     context7_client = Context7Client(api_key=api_key)
 
-    print(f"[ResearchTools] Initialized — Context7: {'✓' if api_key else '✗ (no key)'}")
+    skills_dir = resolve_skills_dir()
+    print(
+        f"[ResearchTools] Initialized — Context7: {'✓' if api_key else '✗ (no key)'}, "
+        f"skills corpus: {skills_dir if skills_dir else '✗ (not found)'}"
+    )
 
 
 # =============================================================================
@@ -195,32 +249,28 @@ def init_research_tools(context7_api_key: Optional[str] = None):
 
 def load_skills_for_task_sync(skill_names: str) -> dict:
     """
-    Load skills from skills.sh before task execution. (Sync wrapper)
+    Load methodology skills from the LOCAL corpus before task execution. (Sync)
 
     Args:
-        skill_names: Comma-separated list of skill names (e.g., "python,fastapi,sql")
+        skill_names: Comma-separated list of skill names
+            (e.g., "test-driven-development,systematic-debugging").
+            The ".md" suffix is optional.
 
     Returns:
-        Summary of loaded skills
+        Summary of loaded skills, including the skill bodies under "details".
     """
-    if not skills_loader:
-        init_research_tools()
-
     skills = [s.strip() for s in skill_names.split(",") if s.strip()]
+    results = load_skills(skills)
 
-    try:
-        loop = _get_or_create_event_loop()
-        results = loop.run_until_complete(skills_loader.load_skills(skills))
-    except Exception as e:
-        print(f"[ResearchTools] Skills loading failed: {e}")
-        results = {s: {"error": str(e)} for s in skills}
-
-    success_count = sum(1 for r in results.values() if "error" not in r)
+    success_count = sum(1 for v in results.values() if v)
     return {
         "success": True,
         "loaded": success_count,
         "total": len(skills),
-        "details": results,
+        "details": {
+            name: (body if body is not None else {"error": "skill not found"})
+            for name, body in results.items()
+        },
     }
 
 
@@ -252,10 +302,12 @@ def research_with_context7_sync(library_name: str, topic: Optional[str] = None) 
 
 def get_research_capabilities() -> dict:
     """
-    Check available research capabilities and API key status.
+    Check available research capabilities and skills-corpus status.
     """
+    skills_dir = resolve_skills_dir()
     return {
-        "skills_sh_available": skills_loader is not None,
+        "skills_corpus_available": skills_dir is not None,
+        "skills_corpus_dir": str(skills_dir) if skills_dir else None,
         "context7_available": context7_client is not None and bool(context7_client.api_key),
         "context7_api_key_set": bool(CONTEXT7_API_KEY),
     }
@@ -263,13 +315,8 @@ def get_research_capabilities() -> dict:
 
 # Keep async versions available for future use
 async def load_skills_for_task(skill_names: str) -> dict:
-    """Async version of load_skills_for_task_sync"""
-    if not skills_loader:
-        init_research_tools()
-    skills = [s.strip() for s in skill_names.split(",") if s.strip()]
-    results = await skills_loader.load_skills(skills)
-    success_count = sum(1 for r in results.values() if "error" not in r)
-    return {"success": True, "loaded": success_count, "total": len(skills), "details": results}
+    """Async version of load_skills_for_task_sync (local corpus, no network)."""
+    return load_skills_for_task_sync(skill_names)
 
 
 async def research_with_context7(library_name: str, topic: Optional[str] = None) -> str:

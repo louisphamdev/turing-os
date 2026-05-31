@@ -67,9 +67,17 @@ PO → PM → HR → Workers (SE, QA, DevOps, Data, Security, ...)
 | `pm-failover.md` | Hot-standby PM with Plane state sync |
 | `resource-scaling.md` | Conservative/Balanced/Aggressive modes |
 
-## Skill Loading
+## Development Methodology
 
-Role-based skills are loaded on demand via `load_skills_for_task` (`base-worker/src/tools/research_tools.py`, also invoked from `command_executor.py`). Skills determine agent capabilities per role.
+Contributors (and the Claude Code contributor harness) follow **superpowers** as the single source of execution discipline:
+
+> brainstorming → writing-plans → test-driven-development → systematic-debugging → verification-before-completion → code-review
+
+Install it as a Claude Code plugin (`/plugin install superpowers@claude-plugins-official`) or use the team's vendored copy. Methodology source: [obra/superpowers](https://github.com/obra/superpowers) (MIT, © 2025 Jesse Vincent).
+
+The runtime workers do **not** run superpowers directly — they follow a terse, tool-mapped translation bundled at `base-worker/skills/` (see its `NOTICE` for attribution). Superpowers is the contributor methodology; the bundled skills are the worker-facing equivalents loaded per role at runtime.
+
+**Before claiming done, run `verification-before-completion`:** run the gates listed under *Testing & Validation* for what you touched and paste the actual output. Evidence before assertions — never claim "passing" without showing it.
 
 ## Messaging / Inbox
 

@@ -6,9 +6,19 @@ user-invocable: true
 
 # Testing Skill
 
+## Methodology — defer to superpowers
+
+The *discipline* of testing (when to write tests, red-green-refactor, what counts
+as "done") is **not** restated here. The source of truth is superpowers
+`test-driven-development` and `verification-before-completion`
+([obra/superpowers](https://github.com/obra/superpowers), MIT, © 2025 Jesse Vincent;
+worker-facing translations live in `base-worker/skills/`). Follow those for *how*
+to test; this skill only documents the project-specific *commands*. Before claiming
+done, run the relevant gates below and paste the actual output.
+
 ## When to Use
 
-This skill handles all testing and validation tasks:
+This skill provides the Turing-OS-specific commands for:
 - Running orchestrator tests (Jest/TypeScript)
 - Running worker tests (pytest/Python)
 - Syntax validation for all languages

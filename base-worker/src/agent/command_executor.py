@@ -223,41 +223,38 @@ def _handle_reload_role(agent: 'HermesAgent', args: dict, sender: str) -> str:
 
 def _handle_reload_skills(agent: 'HermesAgent', args: dict, sender: str) -> str:
     """
-    Reload skills from skills.sh based on role or custom list.
-    
+    Reload the worker's methodology skills (the superpowers-derived gates bundled
+    in base-worker/skills/) into agent.context['methodology'] so the next
+    system-prompt build re-injects the "## Methodology" section. Uses the role's
+    default gates unless an explicit comma-separated skill list is supplied.
+
     Args:
-        skills: Optional comma-separated skill names (uses role defaults if not specified)
+        skills: Optional comma-separated skill file names (defaults to the role's gates)
     """
     import os
-    from tools.research_tools import load_skills_for_task_sync
-    
+    from tools.research_tools import load_skill_file
+
     custom_skills = args.get('skills')
     role = os.environ.get('ROLE', 'default')
-    
+
     if custom_skills:
-        skills_to_load = custom_skills
+        skill_names = [s.strip() for s in str(custom_skills).split(',') if s.strip()]
     else:
-        # Use role-based defaults
-        role_skills = {
-            'software-engineer': 'python,javascript,git,docker,sql',
-            'po': 'product-management,agile,jira',
-            'pm': 'project-management,scrum,asana',
-            'hr': 'recruiting,onboarding,hr-software',
-            'qa': 'testing,selenium,jest,cypress',
-            'devops': 'docker,kubernetes,terraform,ci-cd',
-            'ba': 'data-analysis,sql,excel',
-            'data': 'python,sql,pandas,jupyter',
-            'security': 'security-audit,owasp,pen-testing',
-            'network': 'networking,dns,tcp-ip',
-            'doctor': 'medical-knowledge,diagnostics',
-        }
-        skills_to_load = role_skills.get(role.lower(), 'python,javascript,git')
-    
-    result = load_skills_for_task_sync(skills_to_load)
-    loaded = result.get('loaded', 0)
-    total = result.get('total', 0)
-    
-    return f"✅ Reloaded {loaded}/{total} skills: {skills_to_load}"
+        # Role -> methodology gates (reuse the canonical startup mapping).
+        try:
+            from index import _methodology_skills_for_role
+            skill_names = _methodology_skills_for_role(role)
+        except Exception:
+            skill_names = ['test-driven-development', 'systematic-debugging', 'verification-before-completion']
+
+    methodology = []
+    for name in skill_names:
+        body = load_skill_file(name)
+        if body:
+            methodology.append({'name': name, 'body': body.strip()})
+
+    agent.context['methodology'] = methodology
+    return f"✅ Reloaded {len(methodology)}/{len(skill_names)} methodology skills: {', '.join(skill_names)}"
 
 
 def _handle_inspect(agent: 'HermesAgent', args: dict, sender: str) -> str:
