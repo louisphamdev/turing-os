@@ -120,12 +120,14 @@ class WorkerHealth:
             'last_checkpoint_age': time_module.time() - self._last_checkpoint_time if self._last_checkpoint_time > 0 else -1,
         }
 
-        # Add resource usage if psutil is available
+        # Add resource usage if psutil is available. A missing OR broken
+        # psutil must degrade gracefully (heartbeat still sends, just without
+        # CPU/mem) — so we swallow any Exception, not just ImportError.
         try:
             import psutil
             payload['cpu_percent'] = psutil.cpu_percent(interval=0.1)
             payload['memory_mb'] = psutil.virtual_memory().used / (1024 * 1024)
-        except ImportError:
+        except Exception:
             pass
 
         try:

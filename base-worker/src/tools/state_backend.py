@@ -140,6 +140,49 @@ class PlaneBackend(StateBackend):
             {"comment_html": comment, "comment_stripped": comment},
         )
 
+    def create_ticket(
+        self,
+        title: str,
+        description: str = "",
+        priority: Optional[str] = None,
+    ) -> dict:
+        """Create a new issue in the active Plane project (via the gateway).
+
+        Modelled exactly on the other methods: routes through the same
+        `GATEWAY_URL/gateway/plane/...` proxy with the worker's CONSUMER_TOKEN,
+        and the orchestrator scopes the request to the configured
+        workspace + project (so the worker never builds the
+        /workspaces/{slug}/projects/{project_id} path itself — that prefix is
+        injected by the gateway, identical to read/list/update/comment).
+
+        Plane CE create-issue endpoint:
+            POST /workspaces/{slug}/projects/{project_id}/issues/
+        Body: {"name": <title>, "description_html": <desc>, "priority": <priority?>}
+
+        Returns the same normalised issue shape as read_ticket on success, or
+        the shared {"backend", "error"} dict on failure.
+
+        NOTE: This path has NOT been exercised against a live Plane instance —
+        it is implemented by analogy to the verified read/update/comment calls
+        and needs live-Plane verification (endpoint shape, required fields,
+        priority enum values).
+        """
+        err = self._missing_config()
+        if err:
+            return err
+
+        body: dict = {"name": title, "description_html": description}
+        if priority:
+            body["priority"] = priority
+
+        result = self._request("POST", "/issues/", body)
+        if "error" in result:
+            return result
+
+        # Normalise the created issue to the same shape read_ticket returns.
+        state_lookup = {str(s.get("id")): s for s in self._load_states()}
+        return self._normalise_issue(result, state_lookup)
+
     # ─── Helpers ───────────────────────────────────────────────────────────
 
     def _missing_config(self) -> Optional[dict]:
@@ -259,3 +302,72 @@ def get_backend() -> StateBackend:
     if selected and selected not in ("plane", ""):
         print(f"[StateBackend] WARNING: STATE_BACKEND={selected!r} is no longer supported. Falling back to plane.")
     return PlaneBackend()
+
+
+# ─── Module-level tool wrappers ──────────────────────────────────────────────
+#
+# The Hermes agent (agent/hermes_loop.py:_register_default_tools) registers
+# state-backend tools by MODULE-LEVEL function reference, e.g.
+# `state_backend.update_ticket_status`. The persistence logic lives on the
+# PlaneBackend class, so we expose thin module-level wrappers that delegate to
+# a lazily-cached backend instance. Without these the agent fails to construct
+# (AttributeError on registration) and NO worker can run a task.
+
+_backend: Optional[StateBackend] = None
+
+
+def _get() -> StateBackend:
+    """Return a lazily-cached active backend instance."""
+    global _backend
+    if _backend is None:
+        _backend = get_backend()
+    return _backend
+
+
+def update_ticket_status(ticket_id: str, new_status: str, comment: str = "") -> dict:
+    """Change a ticket's status. Adds a comment when provided."""
+    return _get().update_ticket_status(ticket_id, new_status, comment)
+
+
+def read_ticket(ticket_id: str) -> dict:
+    """Return the canonical ticket payload (normalised across backends)."""
+    return _get().read_ticket(ticket_id)
+
+
+def add_comment(ticket_id: str, comment: str) -> dict:
+    """Append a comment to the ticket."""
+    return _get().add_comment(ticket_id, comment)
+
+
+def create_ticket(title: str, description: str = "", priority: Optional[str] = None) -> dict:
+    """Create a new ticket/issue in the active project.
+
+    NOTE: the underlying PlaneBackend.create_ticket needs live-Plane
+    verification (see its docstring).
+    """
+    return _get().create_ticket(title, description, priority)
+
+
+def search_tickets(query: str = "", status: Optional[str] = None) -> dict:
+    """Search tickets in the active project.
+
+    Thin wrapper over the backend's list_tickets. Plane filtering through the
+    gateway is by state group, so `status` (TODO/IN_PROGRESS/REVIEW/DONE/
+    BLOCKED) maps directly to the list_tickets status filter. A free-text
+    `query` is applied client-side over the returned tickets' title +
+    description so callers get a sensible substring search even though
+    list_tickets has no native text filter.
+    """
+    result = _get().list_tickets(status=status or None)
+    if "error" in result:
+        return result
+
+    tickets = result.get("tickets", [])
+    if query:
+        needle = query.strip().lower()
+        tickets = [
+            t for t in tickets
+            if needle in str(t.get("title", "")).lower()
+            or needle in str(t.get("description", "")).lower()
+        ]
+    return {"tickets": tickets}

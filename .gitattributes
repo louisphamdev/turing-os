@@ -1,0 +1,19 @@
+# Normalize line endings. Files executed inside Linux containers/shells MUST be
+# LF, otherwise a CRLF checkout (e.g. on Windows) breaks the shebang at runtime
+# ("exec: no such file or directory").
+* text=auto
+
+# Shell scripts + container entrypoints + cron tables -> always LF
+*.sh        text eol=lf
+docker-entrypoint.sh text eol=lf
+crontab     text eol=lf
+*.bash      text eol=lf
+
+# PowerShell stays CRLF (Windows)
+*.ps1       text eol=crlf
+
+# Don't touch binaries
+*.png binary
+*.jpg binary
+*.gz  binary
+*.zip binary

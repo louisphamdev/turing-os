@@ -161,19 +161,29 @@ def _heartbeat_loop():
     Reports worker status (idle/working), current task, CPU%, memory MB.
     """
     import requests
-    import psutil
+
+    # psutil is optional — a missing/broken install must degrade gracefully
+    # (heartbeat still sends, just without CPU/mem) instead of crashing the
+    # whole heartbeat thread on import.
+    try:
+        import psutil
+    except Exception:
+        psutil = None
 
     HEARTBEAT_INTERVAL = 120  # seconds
 
     while True:
         try:
-            try:
-                cpu_percent = psutil.cpu_percent(interval=1)
-                mem = psutil.virtual_memory()
-                mem_mb = mem.used / 1024 / 1024
-            except Exception:
-                cpu_percent = None
-                mem_mb = None
+            cpu_percent = None
+            mem_mb = None
+            if psutil is not None:
+                try:
+                    cpu_percent = psutil.cpu_percent(interval=1)
+                    mem = psutil.virtual_memory()
+                    mem_mb = mem.used / 1024 / 1024
+                except Exception:
+                    cpu_percent = None
+                    mem_mb = None
 
             payload = {
                 'ticket_id': TICKET_ID,

@@ -13,10 +13,13 @@ COPY src/ ./src/
 COPY crontab /workspace/crontab
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 
-# Install cron and make entrypoint executable
+# Install cron and make entrypoint executable.
+# Strip any CR (defensive against a CRLF checkout, e.g. on Windows) so the
+# shebang/exec works on Linux even if .gitattributes was bypassed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cron \
     && rm -rf /var/lib/apt/lists/* \
+    && sed -i 's/\r$//' /docker-entrypoint.sh /workspace/crontab \
     && chmod +x /docker-entrypoint.sh
 
 # Run as non-root. cron in the entrypoint stays under this UID — if the
