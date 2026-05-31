@@ -3,6 +3,9 @@ import { config } from '../config';
 import { getCredentialVault } from './credential-vault';
 import { getConsumerTokenManager } from './consumer-token';
 import { getRBACService, Role } from './rbac';
+// Type-only import — erased at compile time, so it does not create a runtime
+// circular dependency with registry.ts (which imports ActiveWorker from here).
+import type { WorkerRegistry } from './registry';
 
 export interface ActiveWorker {
   containerId: string;
@@ -26,8 +29,12 @@ export class DockerService {
   private docker: Docker;
   private secretsCache: Map<string, { value: string; fetchedAt: number }> = new Map();
   private static readonly SECRETS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  // Optional back-reference to the registry so startWorker() can recreate an
+  // ephemeral worker from its stored role/roomId. Injected from index.ts.
+  private registry?: WorkerRegistry;
 
-  constructor() {
+  constructor(registry?: WorkerRegistry) {
+    this.registry = registry;
     const socketPath = config.docker.host;
     this.docker = new Docker(
       socketPath.startsWith('unix') || socketPath.startsWith('/')
@@ -70,7 +77,6 @@ export class DockerService {
       // Plane is the only StateBackend now.
       `STATE_BACKEND=${process.env.STATE_BACKEND || 'plane'}`,
       `PLANE_API_URL=${config.plane.apiUrl}`,
-      `PLANE_API_TOKEN=${config.plane.apiToken}`,
       `PLANE_WORKSPACE_SLUG=${config.plane.workspace}`,
       `PLANE_PROJECT_ID=${config.plane.projectId}`,
       `NATS_URL=${process.env.NATS_URL || 'nats://nats:4222'}`,
@@ -128,6 +134,15 @@ export class DockerService {
         Memory: config.docker.workerRamMb * 1024 * 1024,
         NanoCpus: config.docker.workerCpuCount * 1_000_000_000,
         Binds: ['worker_workspace:/workspace'],
+        // Least-privilege hardening (Task P2-1). The base-worker image already
+        // runs as non-root `USER worker`; these flags add capability + privilege
+        // containment on top. A Python HTTP/file-IO agent needs no Linux caps,
+        // and no-new-privileges blocks escalation via setuid binaries.
+        CapDrop: ['ALL'],
+        SecurityOpt: ['no-new-privileges'],
+        // TODO(P2): ReadonlyRootfs + tmpfs /tmp after live-stack verification
+        // (worker writes /tmp checkpoints, pip caches, etc., so this needs a
+        // tmpfs mount + live testing before it can be enabled safely).
       },
       NetworkingConfig: {
         EndpointsConfig: {
@@ -144,7 +159,7 @@ export class DockerService {
         'com.docker.compose.service': 'worker',
       },
       Healthcheck: {
-        Test: ['CMD-SHELL', 'ps aux | grep "[p]ython main.py" || exit 1'],
+        Test: ['CMD-SHELL', 'ps aux | grep "[s]rc/index.py" || exit 1'],
         Interval: 30000000000, // 30s
         Timeout: 10000000000,  // 10s
         Retries: 3,
@@ -262,15 +277,26 @@ export class DockerService {
     console.log(`[Docker] Imported ${imported} credentials to vault`);
   }
 
-  async restartWorker(ticketId: string, role: string = 'default', roomId: string = ''): Promise<void> {
+  async restartWorker(ticketId: string, _role: string = 'default', _roomId: string = ''): Promise<boolean> {
+    // stopWorker tears the (auto-removed) container down; startWorker then
+    // recreates a fresh ephemeral worker from the registry's role/roomId.
+    // The role/roomId args are kept for backwards-compat with callers but are
+    // sourced authoritatively from the registry inside startWorker().
     await this.stopWorker(ticketId);
-    await this.startWorker(ticketId);
+    const started = await this.startWorker(ticketId);
+    return started;
   }
 
   /**
-   * Gracefully STOP a worker container (SIGTERM) without removing it.
-   * The container stays in Docker's "stopped" state and can be started again later.
-   * This preserves all container state, volumes, and learned data.
+   * Gracefully STOP a worker container (SIGTERM).
+   *
+   * NOTE: workers run with HostConfig.AutoRemove=true, so Docker DELETES the
+   * container as soon as it stops — nothing is "preserved" at the container
+   * level. Workers are ephemeral by design: agent state lives in checkpoints
+   * and the workspace lives in the persistent `worker_workspace` named volume.
+   * A subsequent startWorker() therefore RECREATES a fresh worker (which
+   * restores its state from the checkpoint + volume) rather than resuming the
+   * same container.
    */
   async stopWorker(ticketId: string): Promise<void> {
     const containers = await this.docker.listContainers({
@@ -291,28 +317,60 @@ export class DockerService {
   }
 
   /**
-   * START a previously stopped worker container.
-   * Only works for containers that were stopped (not removed).
-   * Container must still exist in Docker.
+   * START a worker for the given ticket.
+   *
+   * Because workers are ephemeral (HostConfig.AutoRemove=true), a stopped
+   * worker's container is normally already gone. This method therefore:
+   *   - If a container for the ticket STILL EXISTS (e.g. stopped but not yet
+   *     reaped by Docker) → `.start()` it.
+   *   - If NO container exists → RECREATE a fresh worker via spawnWorker(),
+   *     reading role/roomId from the registry. spawnWorker generates a new
+   *     consumer token and (re)maps the Matrix room as needed, so we reuse it
+   *     rather than duplicating spawn logic. The fresh worker restores its
+   *     state from the checkpoint + the persistent `worker_workspace` volume.
+   *
+   * @returns true if a container is now running/created, false otherwise
+   *          (e.g. the registry has no entry so role/roomId are unknown).
    */
-  async startWorker(ticketId: string): Promise<void> {
+  async startWorker(ticketId: string): Promise<boolean> {
     const containers = await this.docker.listContainers({
       filters: { label: [`ticket-id=${ticketId}`] },
-      all: true,  // Include stopped containers
+      all: true,  // Include stopped-but-not-yet-removed containers
     });
 
-    for (const c of containers) {
-      if (c.State !== 'running') {
-        console.log(`[Docker] Starting stopped container ${c.Id.substring(0, 12)} for ticket ${ticketId}`);
+    if (containers.length > 0) {
+      let startedAny = false;
+      for (const c of containers) {
+        if (c.State === 'running') {
+          startedAny = true;
+          continue;
+        }
+        console.log(`[Docker] Starting existing stopped container ${c.Id.substring(0, 12)} for ticket ${ticketId}`);
         try {
           await this.docker.getContainer(c.Id).start();
+          startedAny = true;
         } catch (error: any) {
-          if (!error.message?.includes('already')) {
+          if (error.message?.includes('already')) {
+            startedAny = true;
+          } else {
             throw error;
           }
         }
       }
+      return startedAny;
     }
+
+    // No container exists — the ephemeral worker was auto-removed on stop.
+    // Recreate a fresh one from the registry's role/roomId.
+    const worker = this.registry?.lookupByTicket(ticketId);
+    if (!worker || !worker.role) {
+      console.warn(`[Docker] Cannot recreate worker for ticket ${ticketId}: no registry entry / role`);
+      return false;
+    }
+
+    console.log(`[Docker] No container for ticket ${ticketId}; recreating fresh worker (role: ${worker.role})`);
+    await this.spawnWorker(ticketId, worker.role, worker.roomId || '');
+    return true;
   }
 
   /**

@@ -14,10 +14,13 @@ Storage format (BookStack page):
 
 import os
 import json
-import importlib
+import logging
 import requests
-from datetime import datetime
-from typing import Optional, Callable, Any
+from typing import Optional, Callable
+
+from ._safe_import import safe_import_module, DisallowedModuleError
+
+logger = logging.getLogger(__name__)
 
 # ─── BookStack Tool Storage (gateway-only) ─────────────────────────────────
 
@@ -249,7 +252,6 @@ _loaded_tool_funcs: dict = {}
 
 def load_tool_func(tool_def: dict) -> Optional[Callable]:
     """Load and return a tool function from its BookStack definition."""
-    tool_name = tool_def.get('name')
     module_path = tool_def.get('module')
     function_name = tool_def.get('function')
 
@@ -260,12 +262,22 @@ def load_tool_func(tool_def: dict) -> Optional[Callable]:
     if cache_key in _loaded_tool_funcs:
         return _loaded_tool_funcs[cache_key]
 
+    # SECURITY (P2-7): `module_path` comes from a BookStack /tools/* page's
+    # JSON, i.e. it is fully attacker-controlled if the wiki is poisoned. Gate
+    # the import through the allow-list so only the worker's own tools package
+    # can be loaded — never `os`, `subprocess`, builtins, etc.
+    # TODO(security): namespace /tools/* pages per project to prevent
+    # cross-worker tool poisoning (a hostile page is otherwise imported by
+    # every worker that calls load_from_wiki).
     try:
-        module = importlib.import_module(module_path)
+        module = safe_import_module(module_path)
         func = getattr(module, function_name, None)
         if func:
             _loaded_tool_funcs[cache_key] = func
         return func
+    except DisallowedModuleError as e:
+        logger.warning("Blocked wiki tool import: %s", e)
+        return None
     except ImportError:
         return None
 

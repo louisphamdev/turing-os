@@ -86,8 +86,8 @@ Invoke-RestMethod http://localhost:3001/api/workers
 ## Environment Variables
 
 Key environment files:
-- `taiga.env` — Taiga configuration
-- `.env` — Local overrides
+- `.env` — Stack configuration (copy from `.env.example`; required for `docker compose config`)
+- `docker-compose.override.yml` — Local overrides
 
 ## Troubleshooting
 

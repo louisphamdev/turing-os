@@ -6,10 +6,9 @@ Can be called from main application or as a background thread
 """
 
 import asyncio
-import os
 import shutil
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)

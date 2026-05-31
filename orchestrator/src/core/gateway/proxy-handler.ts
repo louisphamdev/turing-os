@@ -15,6 +15,8 @@ import { LLMProxy } from './llm-proxy';
 import { PlaneProxy } from './plane-proxy';
 import { BookStackProxy } from './bookstack-proxy';
 import { MatrixProxy } from './matrix-proxy';
+import { incGatewayRequest, incGatewayError, statusClassOf } from '../metrics';
+import { logger } from '../logger';
 
 export interface GatewayConfig {
   enabled: boolean;
@@ -171,10 +173,14 @@ export class ProxyHandler {
         duration,
       });
 
+      // Observability — infallible by construction (calls swallow errors).
+      incGatewayRequest(service, statusClassOf(200));
+
       res.status(200).json(result);
 
     } catch (error: any) {
       const duration = Date.now() - startTime;
+      const statusCode = error.statusCode || 500;
 
       // Log failed request
       this.auditLogger.log({
@@ -185,16 +191,44 @@ export class ProxyHandler {
         method: `${method} /${pathParts.slice(2).join('/')}`,
         requestHeaders: this.sanitizeHeaders(req.headers),
         requestBody: this.sanitizeBody(req.body),
-        responseStatus: error.statusCode || 500,
+        responseStatus: statusCode,
         duration,
         error: error.message,
       });
 
+      // Observability — infallible by construction (calls swallow errors).
+      incGatewayRequest(service, statusClassOf(statusCode));
+      incGatewayError(service);
+
+      // Structured error log. The fields object is passed through the logger's
+      // redactor, so even if a proxy error ever carried a token/secret in its
+      // context it would be masked. requestId correlates with the request-logger
+      // line emitted in index.ts.
+      logger.error('gateway_proxy_error', {
+        requestId: (req as unknown as { requestId?: string }).requestId,
+        service,
+        method,
+        endpoint: pathParts.slice(2).join('/'),
+        statusCode,
+        durationMs: duration,
+        workerId: validation.payload.workerId,
+        role: validation.payload.role,
+        error: error.message || String(error),
+      });
       console.error(`[ProxyHandler] ${service} proxy error:`, error);
-      res.status(error.statusCode || 500).json({ 
-        error: error.message || 'Internal gateway error' 
+      res.status(statusCode).json({
+        error: error.message || 'Internal gateway error'
       });
     }
+  }
+
+  /**
+   * Stop background timers owned by this handler (rate-limiter cleanup,
+   * audit-logger flush). Called from the orchestrator graceful shutdown.
+   */
+  stop(): void {
+    this.rateLimiter.stop?.();
+    this.auditLogger.stop?.();
   }
 
   /**

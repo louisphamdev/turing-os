@@ -109,15 +109,15 @@ export class LLMProxy {
     const providerConfig = this.getProviderForModel(model);
 
     // Get the real API key from vault
-    const credential = await this.vault.getCredentialByType('llm', providerConfig.provider);
-    
+    let credential = await this.vault.getCredentialByType('llm', providerConfig.provider);
+
     if (!credential) {
       // Fallback: try any LLM credential
       const anyCredential = await this.vault.getCredentialByType('llm');
       if (!anyCredential) {
         throw { message: 'No LLM credential configured', statusCode: 503 };
       }
-      credential.key = anyCredential.key;
+      credential = anyCredential;
     }
 
     // Build the target URL
@@ -147,7 +147,7 @@ export class LLMProxy {
    * Build the target URL for the LLM API
    */
   private buildTargetUrl(baseUrl: string, endpoint: string, body?: LLMRequest): string {
-    let url = `${baseUrl}/${endpoint}`;
+    const url = `${baseUrl}/${endpoint}`;
     
     // For OpenAI-compatible APIs, handle chat/completions specially
     if (endpoint === 'chat/completions' && body?.model) {

@@ -70,7 +70,7 @@ Orchestrator (3001) ──── Docker Socket ──── Worker Containers
 
 | Endpoint | Purpose |
 |----------|---------|
-| `/webhooks/taiga` | Taiga ticket events |
+| `/webhooks/plane` | Plane ticket events (worker provisioning) |
 | `/webhooks/matrix` | Matrix messages from admin |
 | `/webhooks/worker-message` | Worker completion/blocker reports |
 
@@ -112,9 +112,11 @@ messages; messages in any other worker room are redirected to PM.
 
 ### RBAC Enforcement
 ```typescript
-// Every gateway request checks
-const allowed = rbacService.canAccess(role, resource, action);
-// Returns: { allowed: boolean, reason?: string }
+// Every gateway request checks service access, then method-level action
+const rbac = getRBACService();
+const allowed = rbac.canAccessService(role, service);        // 'llm'|'plane'|'bookstack'|'matrix'|'github'
+const canDo = rbac.canPerformAction(role, service, action);  // 'read'|'write'|'admin'
+// Both return boolean. getPermissionsForRole(role) lists a role's permissions.
 ```
 
 ## Important Files

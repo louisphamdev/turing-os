@@ -8,7 +8,6 @@ Provides both async and sync wrappers so the synchronous Hermes agent loop can c
 """
 
 import os
-import json
 import asyncio
 from typing import Optional, Any
 

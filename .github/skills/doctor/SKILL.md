@@ -1,12 +1,14 @@
 ---
 name: doctor
 description: **SKILL** — Doctor Agent diagnostic & self-healing toolkit for Turing OS. Use when: diagnosing errors, fixing system issues, checking Docker/container health, querying known issues database, running self-healing scripts, tracking fix metrics, or generating GitHub issues. Triggers: "doctor", "diagnose", "fix error", "system health", "self-heal", "container crashed", "service down"
-file: d:\Source\Project_Turing\turing-os\.github\skills\doctor\SKILL.md
 ---
 
 # Doctor Agent Skill — Diagnostic & Self-Healing Toolkit
 
-> ⚡ Doctor is the **crown jewel** of Turing OS — the autonomous system doctor that runs 24/7, diagnoses failures, attempts self-healing, escalates intelligently, and learns from every incident.
+> Doctor is the system-doctor agent: it diagnoses failures, attempts self-healing,
+> escalates, and records incidents. Fix-execution (running fix scripts, config
+> patching, dynamic script generation) is **experimental** — diagnosis and
+> escalation are the reliable paths.
 
 ## Core Philosophy
 
@@ -36,11 +38,11 @@ ARGUMENTS: {"container_name": "turing-orchestrator", "lines": 100}
 ```
 
 ### 3. `check_service_connectivity(service_name)`
-Test if a service (taiga, wiki, matrix, context7, github, orchestrator) is up/degraded/down.
+Test if a service (plane, bookstack, matrix, orchestrator, github) is up/degraded/down.
 
 ```python
 TOOL_CALL: check_service_connectivity
-ARGUMENTS: {"service_name": "taiga"}
+ARGUMENTS: {"service_name": "plane"}
 ```
 
 ### 4. `check_recent_errors(count=10)`
@@ -68,7 +70,7 @@ ARGUMENTS: {"error_key": "worker OOM", "symptoms": "Container killed by OOM kill
 ```
 
 ### 7. `create_github_issue(title, body, labels, assignees)`
-Create a structured GitHub issue. Token fetched from BookStack `/api/secrets/doctor-github-token` first.
+Create a structured GitHub issue via the gateway GitHub proxy (the GitHub token lives in the orchestrator vault; the worker uses `CONSUMER_TOKEN`).
 
 ```python
 TOOL_CALL: create_github_issue
@@ -115,9 +117,10 @@ TOOL_CALL: ask_user_confirmation
 ARGUMENTS: {"question": "Should I restart the failed container?"}
 ```
 
-### 13. `run_self_healing_pipeline(error_description)` 🌟 **CROWN JEWEL**
-**ONE TOOL TO RULE THEM ALL.** Orchestrates the full self-healing workflow:
+### 13. `run_self_healing_pipeline(error_description)` (experimental)
+Orchestrates the full self-healing workflow:
 diagnose → check known issues → attempt fix → verify → track → report.
+The fix-execution steps are experimental; diagnosis + escalation are reliable.
 
 ```python
 TOOL_CALL: run_self_healing_pipeline
@@ -163,7 +166,7 @@ Used when the fix requires capabilities from devops, qa, se, or pm workers.
 ```python
 # Scale via DevOps worker
 TOOL_CALL: invoke_worker_tool
-ARGUMENTS: {"target_role": "devops", "tool_name": "scale_worker", "arguments": {"service": "taiga", "replicas": 3}}
+ARGUMENTS: {"target_role": "devops", "tool_name": "scale_worker", "arguments": {"service": "plane", "replicas": 3}}
 
 # Run tests via QA worker
 TOOL_CALL: invoke_worker_tool
@@ -332,8 +335,8 @@ Doctor can inspect ALL containers in the system — both workers AND infrastruct
 | `turing-worker-qa-*` | qa |
 | `turing-worker-se-*` | software-engineer |
 | `turing-orchestrator` | orchestrator |
-| `turing_taiga_*` | taiga |
-| `turing_wiki` | wiki |
+| `plane-*` / `turing_plane_*` | plane |
+| `turing_bookstack` | bookstack |
 | `synapse` | matrix |
 | `turing_redis` | redis |
 | `postgres` | postgres |
@@ -425,7 +428,7 @@ Doctor uses these labels for systematic bug tracking:
   "open_escalations_count": 3,
   "system_health_summary": {
     "docker": "running",
-    "network": {"taiga": "up", "wiki": "up"},
+    "network": {"plane": "up", "bookstack": "up"},
     "disk_percent": 67,
     "memory_percent": 72.3
   }

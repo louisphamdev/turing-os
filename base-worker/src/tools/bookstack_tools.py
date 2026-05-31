@@ -138,7 +138,7 @@ def list_books(count: int = 50) -> list:
     """
     List all books in BookStack.
     """
-    print(f"[BookStack] Listing books")
+    print("[BookStack] Listing books")
 
     result = _make_request('GET', 'books', params={'count': count})
     if 'error' in result:

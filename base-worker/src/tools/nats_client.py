@@ -26,7 +26,7 @@ import re
 import threading
 import time
 from queue import Queue
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 
 
 def worker_subject(role: str, ticket_id: str, kind: str) -> str:

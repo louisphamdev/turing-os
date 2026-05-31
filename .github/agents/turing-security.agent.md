@@ -35,7 +35,7 @@ Project Turing OS is a multi-agent system with:
 - **Orchestrator** (TypeScript): Central API gateway with JWT auth and RBAC
 - **Base Workers** (Python): Ephemeral containers running untrusted agent code
 - **Communication**: Matrix/Synapse for admin↔worker messaging (needs security review)
-- **Integrations**: Taiga (tickets), BookStack (docs/secrets), external APIs
+- **Integrations**: Plane (tickets/state), BookStack (docs), external APIs via gateway
 
 ## Security Focus Areas
 
@@ -57,9 +57,9 @@ Project Turing OS is a multi-agent system with:
 - Matrix/Synapse security settings
 
 ### 4. Credential Management
-- BookStack for secrets storage
-- Gateway proxy for external API calls
-- No hardcoded credentials in code
+- Credentials live in the orchestrator vault (`credential-vault.ts`, imported from env via `importFromEnvironment`)
+- Gateway proxy for external API calls (workers use `GATEWAY_URL` + `CONSUMER_TOKEN`)
+- No hardcoded credentials in code; no raw API keys in workers
 - Rotation and expiry policies
 
 ### 5. Container Hardening
@@ -97,14 +97,14 @@ Project Turing OS is a multi-agent system with:
 
 1. **No direct API keys in worker containers** — All external calls go through gateway
 2. **PM-Centralized communication** — Prevents lateral movement between workers
-3. **Input sanitization** — All external input (Taiga, Matrix) must be sanitized
+3. **Input sanitization** — All external input (Plane, Matrix) must be sanitized
 4. **Least privilege** — Workers run with minimal permissions
 
 ## Known Security Patterns
 
 - JWT stored in `Authorization: Bearer <token>` header
-- RBAC middleware at `orchestrator/src/core/rbac.ts`
-- Secrets retrieved from BookStack API, not hardcoded
+- RBAC enforced at the gateway via `orchestrator/src/core/rbac.ts` (`canAccessService`, `canPerformAction`)
+- Secrets held in the orchestrator vault (`credential-vault.ts`), imported from env, never hardcoded
 - Matrix messages relayed verbatim to PM/PO; only PM/PO LLMs interpret them
 
 ## Related Documentation

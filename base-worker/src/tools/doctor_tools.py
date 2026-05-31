@@ -32,7 +32,6 @@ import json
 import subprocess
 import re
 import time
-import threading
 from datetime import datetime, timezone
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -217,7 +216,7 @@ def parse_docker_logs(container_name: str, lines: int = 50) -> dict:
     except subprocess.TimeoutExpired:
         result['error'] = 'Docker logs command timed out after 30s'
         return result
-    except Exception as e:
+    except Exception:
         # Any other error → try orchestrator relay before giving up
         raw = ''
 
@@ -225,8 +224,9 @@ def parse_docker_logs(container_name: str, lines: int = 50) -> dict:
     if not raw.strip():
         try:
             import requests as _req
+            from orchestrator_auth import orchestrator_headers
             url = f'{ORCHESTRATOR_URL}/containers/{container_name}/logs'
-            resp = _req.get(url, params={'lines': lines}, timeout=20)
+            resp = _req.get(url, params={'lines': lines}, headers=orchestrator_headers(), timeout=20)
             if resp.status_code == 200:
                 data = resp.json()
                 raw = '\n'.join(
@@ -481,7 +481,8 @@ def list_docker_containers(include_logs: bool = False, log_lines: int = 20) -> d
     if not raw_json.strip():
         try:
             import requests as _req
-            resp = _req.get(f'{ORCHESTRATOR_URL}/containers', timeout=15)
+            from orchestrator_auth import orchestrator_headers
+            resp = _req.get(f'{ORCHESTRATOR_URL}/containers', headers=orchestrator_headers(), timeout=15)
             if resp.status_code == 200:
                 data = resp.json()
                 raw_json = json.dumps(data.get('containers', []))
@@ -808,7 +809,6 @@ def _parse_known_issue_page(content: str) -> dict:
         'pattern': '',
     }
     lines = content.splitlines()
-    current_key = None
     for line in lines:
         line_stripped = line.strip()
         # Skip table header/separator lines
@@ -996,6 +996,7 @@ def _get_github_token() -> str:
     token = GITHUB_TOKEN_FALLBACK
     if BOOKSTACK_TOKEN:
         try:
+            import requests
             resp = requests.get(
                 f'{BOOKSTACK_URL}/api/secrets/doctor-github-token',
                 headers={'Authorization': f'Bearer {BOOKSTACK_TOKEN}'},
@@ -1953,7 +1954,6 @@ def _classify_error(error_msg: str, container_name: str = '') -> tuple[str, str]
     Returns: (classification, severity)
     """
     msg = error_msg.lower()
-    container = container_name.lower()
 
     # LLM Bug patterns
     llm_patterns = [

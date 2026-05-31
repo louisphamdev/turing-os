@@ -52,3 +52,34 @@ describe('ConsumerTokenManager revocation', () => {
     expect(mgr.validateToken(drop.token).error).toBe('Token revoked');
   });
 });
+
+describe('ConsumerTokenManager ticket binding (P2-5)', () => {
+  it('issued token carries meta.ticketId and validateToken returns it', () => {
+    const mgr = new ConsumerTokenManager('test-secret-must-be-at-least-32-chars-long!!');
+    const { token } = mgr.generateToken({
+      workerId: 'turing-worker-qa-t-100',
+      role: 'qa',
+      permissions: ['plane:read'],
+      expiresIn: 1,
+      metadata: { ticketId: 'T-100', description: 'Worker for ticket T-100' },
+    });
+
+    const result = mgr.validateToken(token);
+    expect(result.valid).toBe(true);
+    expect(result.payload?.meta?.ticketId).toBe('T-100');
+  });
+
+  it('token issued without a ticketId has no meta.ticketId', () => {
+    const mgr = new ConsumerTokenManager('test-secret-must-be-at-least-32-chars-long!!');
+    const { token } = mgr.generateToken({
+      workerId: 'no-ticket-worker',
+      role: 'qa',
+      permissions: ['plane:read'],
+      expiresIn: 1,
+    });
+
+    const result = mgr.validateToken(token);
+    expect(result.valid).toBe(true);
+    expect(result.payload?.meta?.ticketId).toBeUndefined();
+  });
+});

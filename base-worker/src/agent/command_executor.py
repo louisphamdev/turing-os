@@ -14,13 +14,19 @@ Executes commands injected via the orchestrator's worker-inbox endpoint
 - delete_tool: Delete a tool from Wiki
 """
 
-import json
 import time
-import importlib
+import logging
 from typing import TYPE_CHECKING
+
+try:  # runtime: worker starts as `python /workspace/src/index.py` → `tools.*`
+    from tools._safe_import import safe_import_module, DisallowedModuleError
+except ImportError:  # tests/CI run from base-worker/ with `src` on the path
+    from src.tools._safe_import import safe_import_module, DisallowedModuleError
 
 if TYPE_CHECKING:
     from agent.hermes_loop import HermesAgent
+
+logger = logging.getLogger(__name__)
 
 # ─── Tool Registry — Dynamic Tool Loading ─────────────────────────────────
 
@@ -341,11 +347,17 @@ def _handle_save_tool(agent: 'HermesAgent', args: dict, sender: str) -> str:
     if not tool_name or not tool_module or not tool_function:
         return "❌ `tool_name`, `tool_module`, and `tool_function` are required"
 
-    # Get the function first to validate it exists
+    # Get the function first to validate it exists.
+    # SECURITY (P2-7): `tool_module` is admin/structured-command supplied —
+    # gate it through the allow-list so only the worker's own tools package
+    # can be imported (importing arbitrary modules runs their top-level code).
     func = None
     try:
-        module = importlib.import_module(tool_module)
+        module = safe_import_module(tool_module)
         func = getattr(module, tool_function, None)
+    except DisallowedModuleError as e:
+        logger.warning("save_tool blocked disallowed module %r: %s", tool_module, e)
+        return f"🚫 Module `{tool_module}` is not allowed: only tools-package modules may be loaded."
     except ImportError as e:
         return f"❌ Module `{tool_module}` not found: {str(e)[:100]}"
 
@@ -460,15 +472,17 @@ def _try_load_tool_function(tool_name: str, args: dict):
     }
 
     # ─── Try built-in mappings ────────────────────────────────────────────
+    # Paths here are hardcoded `tools.*` (trusted), but we still route them
+    # through the allow-list helper to keep a single import path (P2-7).
     if tool_name in builtin_tools:
         module_path, func_name = builtin_tools[tool_name]
         try:
-            module = importlib.import_module(module_path)
+            module = safe_import_module(module_path)
             func = getattr(module, func_name, None)
             if func:
                 _dyn_tools[tool_name] = func
                 return func
-        except ImportError:
+        except (ImportError, DisallowedModuleError):
             pass
 
     # ─── Try MCP tools (pylance) ─────────────────────────────────────────
@@ -476,15 +490,20 @@ def _try_load_tool_function(tool_name: str, args: dict):
         return _load_pylance_tool(tool_name, args)
 
     # ─── Try module.function syntax ───────────────────────────────────────
+    # SECURITY (P2-7): `tool_module` is caller-supplied — gate through the
+    # allow-list so only the worker's own tools package can be imported.
     tool_module = args.get('tool_module')
     tool_function = args.get('tool_function', tool_name)
     if tool_module:
         try:
-            module = importlib.import_module(tool_module)
+            module = safe_import_module(tool_module)
             func = getattr(module, tool_function, None)
             if func:
                 _dyn_tools[tool_name] = func
                 return func
+        except DisallowedModuleError as e:
+            # Don't silently swallow — caller turns None into a clear error.
+            logger.warning("register_tool blocked disallowed module %r: %s", tool_module, e)
         except ImportError:
             pass
 
@@ -530,7 +549,7 @@ def _load_pylance_tool(tool_name: str, args: dict):
             
             _dyn_tools[tool_name] = pylance_wrapper
             return pylance_wrapper
-        except Exception as e:
+        except Exception:
             return None
 
     # Generic MCP tool wrapper

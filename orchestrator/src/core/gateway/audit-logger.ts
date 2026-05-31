@@ -83,7 +83,8 @@ export class AuditLogger {
     
     // Flush buffer every 5 seconds
     this.flushInterval = setInterval(() => this.flush(), 5000);
-    
+    this.flushInterval.unref?.();
+
     console.log(`[AuditLogger] Logging to ${this.logDir}`);
   }
 
@@ -395,8 +396,14 @@ export class AuditLogger {
   shutdown(): void {
     if (this.flushInterval) {
       clearInterval(this.flushInterval);
+      this.flushInterval = null;
     }
     this.flush();
     console.log('[AuditLogger] Shutdown complete');
+  }
+
+  /** Alias for shutdown() — stops the flush timer and flushes buffered entries. */
+  stop(): void {
+    this.shutdown();
   }
 }

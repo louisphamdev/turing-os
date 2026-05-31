@@ -16,7 +16,7 @@ const SUSPICIOUS_PATTERNS = [
   /wget .* -O/i,
   /curl .* \| bash/i,
   /> \/dev\/(sda|hda|null)/i,
-  /: \(\) \{ :\|: \& \} ; :/i, // fork bomb
+  /: \(\) \{ :\|: & \} ; :/i, // fork bomb
   /bypass/i,
   /you are now/i,
   /forget (everything|your instructions)/i,

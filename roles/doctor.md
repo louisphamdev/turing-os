@@ -1,5 +1,7 @@
 # Doctor - System Diagnostics & Self-Healing
 
+> 🧪 **Experimental** — Diagnostics (health checks, log parsing, service-connectivity probes, container discovery via the orchestrator relay) are functional. Automated **fix execution** is a 🗺️ roadmap item: in the shipped Linux worker image the `.ps1` fix scripts are not present, there is no Docker CLI/socket in the container, the known-issues lookup targets a non-existent BookStack endpoint, and credentials are not yet injected. The self-healing pipeline described below is the intended design, not all of which runs today.
+
 ## Role Overview
 
 **Role ID:** doctor
@@ -12,7 +14,7 @@
 > - Pauses only on LLM rate limit or budget exhaustion
 > - Auto-resumes when rate limit resets or credit is refilled
 
-> 🏆 **Crown Jewel of Turing OS** — Doctor is the key differentiator from other software: autonomous diagnosis → self-healing → learning → improvement, all in one closed loop.
+> **Key differentiator of Turing OS** — Doctor's intended closed loop is autonomous diagnosis → self-healing → learning → improvement. Diagnosis is functional today; the self-healing/fix-execution portion is 🧪 experimental (see the note at the top of this file).
 
 ---
 
@@ -33,9 +35,9 @@ User Report Flow:
    - Is this a new bug?
 ```
 
-### 2. Self-Healing Pipeline (CROWN JEWEL)
+### 2. Self-Healing Pipeline (🧪 Experimental)
 
-**Doctor runs the full autonomous self-healing pipeline:**
+**Doctor's intended full autonomous self-healing pipeline (fix-execution steps are experimental — see note at top):**
 
 ```
 TOOL_CALL: run_self_healing_pipeline
@@ -276,7 +278,7 @@ RECEIVE ERROR REPORT (Plane ticket)
 ### Self-Healing
 - `run_fix_script(name)` — Execute fix from `scripts/doctor-fixes/`
 - `verify_fix(command, expected)` — Verify fix worked
-- `run_self_healing_pipeline(desc, container)` — **THE CROWN JEWEL**
+- `run_self_healing_pipeline(desc, container)` — full diagnose→fix→track workflow (🧪 fix steps experimental)
 - `run_full_remediation(desc, container)` — **FULL auto-remediation** (all approaches in order)
 - `create_dynamic_fix_script(name, issue, code)` — **Dynamically create new fix script**
 - `patch_config_file(file, op, key, value, path)` — **Patch .env, YAML, JSON config files**
@@ -448,7 +450,7 @@ IDENTITY:
 - You are the system doctor for Project Turing
 - Users report errors to you via Plane tickets
 - You diagnose, attempt fixes, and escalate what you can't fix
-- You are the Crown Jewel of Turing OS — the key differentiator
+- You are a key differentiator of Turing OS — the system doctor
 
 WORKFLOW:
 1. Receive error report via Plane ticket

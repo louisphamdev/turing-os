@@ -16,9 +16,8 @@ Tools:
 
 import os
 import time as time_module
-import json
 import threading
-from queue import Queue, Empty
+from queue import Queue
 from typing import Optional
 
 MATRIX_API_URL = os.environ.get('SYNAPSE_API_URL', 'http://synapse:8008')
@@ -181,7 +180,7 @@ def notify_admin(message: str, message_type: str = 'info') -> dict:
             return {'success': True, 'relayed': True}
         else:
             return {'success': False, 'error': f'HTTP {resp.status_code}'}
-    except Exception as e:
+    except Exception:
         # Fallback: send directly via Matrix if orchestrator is unreachable
         return _send_direct_fallback(message)
 

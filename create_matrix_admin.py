@@ -3,6 +3,8 @@ import hmac
 import hashlib
 import urllib.request
 import json
+import os
+import sys
 
 # Get nonce
 with urllib.request.urlopen('http://localhost:8008/_synapse/admin/v1/register') as resp:
@@ -11,8 +13,12 @@ with urllib.request.urlopen('http://localhost:8008/_synapse/admin/v1/register') 
 
 print(f"Got nonce: {nonce[:30]}...")
 
-# MAC key from homeserver.yaml
-secret = 'f643143e19d68d088741f6ca465894bb6964ca284b5d2c58a8dcc3348750f4e4'
+# MAC key — must match registration_shared_secret in synapse/homeserver.yaml.
+# No baked-in secret: read it from the environment and fail loudly if unset.
+secret = os.environ.get('SYNAPSE_REGISTRATION_SECRET', '')
+if not secret:
+    sys.exit('ERROR: SYNAPSE_REGISTRATION_SECRET is not set. Set it in .env '
+             '(must match registration_shared_secret in synapse/homeserver.yaml).')
 password = 'Admin123!'
 
 # Try different MAC formats

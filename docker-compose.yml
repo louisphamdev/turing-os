@@ -3,13 +3,13 @@
 x-plane-env: &plane-env
   DEBUG: "0"
   DJANGO_SETTINGS_MODULE: plane.settings.production
-  DATABASE_URL: postgresql://${PLANE_DB_USER:-plane}:${PLANE_DB_PASSWORD:-plane_password}@plane-db/${PLANE_DB:-plane}
+  DATABASE_URL: "postgresql://${PLANE_DB_USER:-plane}:${PLANE_DB_PASSWORD:?Set PLANE_DB_PASSWORD in .env - set a strong password}@plane-db/${PLANE_DB:-plane}"
   REDIS_URL: redis://turing_redis:6379/2
   # Celery broker. Plane's settings.common builds CELERY_BROKER_URL from
   # RABBITMQ_* unless AMQP_URL is set. We point AMQP_URL at the dedicated
   # plane-mq RabbitMQ container.
-  AMQP_URL: amqp://${PLANE_RMQ_USER:-plane}:${PLANE_RMQ_PASSWORD:-plane_rmq_pass}@plane-mq:5672/${PLANE_RMQ_VHOST:-plane}
-  SECRET_KEY: ${PLANE_SECRET_KEY:-change-me-in-production}
+  AMQP_URL: "amqp://${PLANE_RMQ_USER:-plane}:${PLANE_RMQ_PASSWORD:?Set PLANE_RMQ_PASSWORD in .env - set a strong password}@plane-mq:5672/${PLANE_RMQ_VHOST:-plane}"
+  SECRET_KEY: "${PLANE_SECRET_KEY:?Set PLANE_SECRET_KEY in .env - generate with openssl rand -hex 32}"
   WEB_URL: http://localhost:9000
   ADMIN_BASE_URL: ""
   ADMIN_BASE_PATH: /god-mode
@@ -19,11 +19,11 @@ x-plane-env: &plane-env
   USE_MINIO: "1"
   AWS_REGION: ""
   AWS_ACCESS_KEY_ID: ${PLANE_MINIO_ROOT_USER:-plane-minio-admin}
-  AWS_SECRET_ACCESS_KEY: ${PLANE_MINIO_ROOT_PASSWORD:-plane-minio-secret}
+  AWS_SECRET_ACCESS_KEY: "${PLANE_MINIO_ROOT_PASSWORD:?Set PLANE_MINIO_ROOT_PASSWORD in .env - set a strong password}"
   AWS_S3_ENDPOINT_URL: http://plane-minio:9000
   AWS_S3_BUCKET_NAME: ${PLANE_S3_BUCKET:-uploads}
   MINIO_ROOT_USER: ${PLANE_MINIO_ROOT_USER:-plane-minio-admin}
-  MINIO_ROOT_PASSWORD: ${PLANE_MINIO_ROOT_PASSWORD:-plane-minio-secret}
+  MINIO_ROOT_PASSWORD: "${PLANE_MINIO_ROOT_PASSWORD:?Set PLANE_MINIO_ROOT_PASSWORD in .env - set a strong password}"
   BUCKET_NAME: ${PLANE_S3_BUCKET:-uploads}
   FILE_SIZE_LIMIT: "5242880"
   GUNICORN_WORKERS: "2"
@@ -36,7 +36,7 @@ services:
     environment:
       - POSTGRES_DB=${PLANE_DB:-plane}
       - POSTGRES_USER=${PLANE_DB_USER:-plane}
-      - POSTGRES_PASSWORD=${PLANE_DB_PASSWORD:-plane_password}
+      - "POSTGRES_PASSWORD=${PLANE_DB_PASSWORD:?Set PLANE_DB_PASSWORD in .env - set a strong password}"
     volumes:
       - plane_db_data:/var/lib/postgresql/data
     networks:
@@ -54,7 +54,7 @@ services:
     command: server /data --console-address ":9090"
     environment:
       - MINIO_ROOT_USER=${PLANE_MINIO_ROOT_USER:-plane-minio-admin}
-      - MINIO_ROOT_PASSWORD=${PLANE_MINIO_ROOT_PASSWORD:-plane-minio-secret}
+      - "MINIO_ROOT_PASSWORD=${PLANE_MINIO_ROOT_PASSWORD:?Set PLANE_MINIO_ROOT_PASSWORD in .env - set a strong password}"
     volumes:
       - plane_minio_data:/data
     networks:
@@ -71,7 +71,7 @@ services:
     container_name: turing_plane_mq
     environment:
       - RABBITMQ_DEFAULT_USER=${PLANE_RMQ_USER:-plane}
-      - RABBITMQ_DEFAULT_PASS=${PLANE_RMQ_PASSWORD:-plane_rmq_pass}
+      - "RABBITMQ_DEFAULT_PASS=${PLANE_RMQ_PASSWORD:?Set PLANE_RMQ_PASSWORD in .env - set a strong password}"
       - RABBITMQ_DEFAULT_VHOST=${PLANE_RMQ_VHOST:-plane}
     volumes:
       - plane_mq_data:/var/lib/rabbitmq
@@ -189,10 +189,10 @@ services:
     environment:
       - PUID=1000
       - PGID=1000
-      - MYSQL_ROOT_PASSWORD=${BOOKSTACK_DB_ROOT_PASSWORD:-bookstack_root_pass}
+      - "MYSQL_ROOT_PASSWORD=${BOOKSTACK_DB_ROOT_PASSWORD:?Set BOOKSTACK_DB_ROOT_PASSWORD in .env - set a strong password}"
       - MYSQL_DATABASE=${BOOKSTACK_DB_NAME:-bookstack}
       - MYSQL_USER=${BOOKSTACK_DB_USER:-bookstack}
-      - MYSQL_PASSWORD=${BOOKSTACK_DB_PASSWORD:-bookstack_pass}
+      - "MYSQL_PASSWORD=${BOOKSTACK_DB_PASSWORD:?Set BOOKSTACK_DB_PASSWORD in .env - set a strong password}"
     volumes:
       - ./bookstack_data/mysql:/config
     networks:
@@ -216,11 +216,11 @@ services:
       - PUID=1000
       - PGID=1000
       - APP_URL=${BOOKSTACK_URL:-http://localhost:6875}
-      - APP_KEY=${BOOKSTACK_APP_KEY:-some_random_key_change_in_production}
+      - "APP_KEY=${BOOKSTACK_APP_KEY:?Set BOOKSTACK_APP_KEY in .env - see comment in .env.example to generate a Laravel key}"
       - DB_HOST=bookstack-db
       - DB_PORT=3306
       - DB_USERNAME=${BOOKSTACK_DB_USER:-bookstack}
-      - DB_PASSWORD=${BOOKSTACK_DB_PASSWORD:-bookstack_pass}
+      - "DB_PASSWORD=${BOOKSTACK_DB_PASSWORD:?Set BOOKSTACK_DB_PASSWORD in .env - set a strong password}"
       - DB_DATABASE=${BOOKSTACK_DB_NAME:-bookstack}
     networks:
       - turing_network
@@ -239,17 +239,23 @@ services:
     image: matrixdotorg/synapse:v1.119.0
     container_name: synapse
     ports:
-      - "8008:8008"
-      - "8448:8448"
+      # Bind to localhost only. Synapse must not be reachable beyond the host
+      # (open registration + shared-secret admin register == account takeover).
+      # homeserver.yaml only defines a listener on 8008, so the unused 8448
+      # federation mapping has been dropped.
+      - "127.0.0.1:8008:8008"
     volumes:
       - ./synapse:/data
     environment:
       - SYNAPSE_SERVER_NAME=localhost
-      - SYNAPSE_REGISTRATION_SECRET=${SYNAPSE_REGISTRATION_SECRET:-change-me-in-production}
+      - "SYNAPSE_REGISTRATION_SECRET=${SYNAPSE_REGISTRATION_SECRET:?Set SYNAPSE_REGISTRATION_SECRET in .env - generate with openssl rand -hex 32}"
       - SYNAPSE_REPORT_STATS=no
-      - SYNAPSE_ENABLE_REGISTRATION=true
-      - SYNAPSE_ALLOW_GUEST_ACCESS=true
-      - SYNAPSE_REGISTRATION_WITHOUT_VERIFICATION=true
+      # Open registration / guest access OFF by default. Override via .env only
+      # if you intentionally want a self-serve instance. Admin/bot bootstrap uses
+      # shared-secret register (/_synapse/admin/v1/register), which is unaffected.
+      - SYNAPSE_ENABLE_REGISTRATION=${SYNAPSE_ENABLE_REGISTRATION:-false}
+      - SYNAPSE_ALLOW_GUEST_ACCESS=${SYNAPSE_ALLOW_GUEST_ACCESS:-false}
+      - SYNAPSE_REGISTRATION_WITHOUT_VERIFICATION=${SYNAPSE_REGISTRATION_WITHOUT_VERIFICATION:-false}
       - SYNAPSE_SUPPRESS_KEY_SERVER_WARNING=true
     networks:
       - turing_network
@@ -264,7 +270,7 @@ services:
     image: vectorim/element-web:v1.11.34
     container_name: turing_element
     ports:
-      - "${ELEMENT_PORT:-8081}:80"
+      - "${ELEMENT_PORT:-8080}:80"
     volumes:
       - ./element_config/config.json:/usr/share/nginx/html/config.json:ro
     environment:

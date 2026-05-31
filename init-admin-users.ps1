@@ -166,7 +166,13 @@ $envMap = Get-EnvMap -EnvFile $envFile
 $adminUser = if ($envMap.ADMIN_USER) { $envMap.ADMIN_USER } else { 'admin' }
 $adminPass = if ($envMap.ADMIN_PASSWORD) { $envMap.ADMIN_PASSWORD } else { 'Admin123!' }
 $synapseApiUrl = if ($envMap.SYNAPSE_API_URL) { $envMap.SYNAPSE_API_URL } else { 'http://localhost:8008' }
-$registrationSecret = if ($envMap.SYNAPSE_REGISTRATION_SECRET) { $envMap.SYNAPSE_REGISTRATION_SECRET } else { 'f643143e19d68d088741f6ca465894bb6964ca284b5d2c58a8dcc3348750f4e4' }
+# No baked-in secret. Require it from .env (must match registration_shared_secret
+# in synapse/homeserver.yaml). Fall back to the process env var if present.
+$registrationSecret = if ($envMap.SYNAPSE_REGISTRATION_SECRET) { $envMap.SYNAPSE_REGISTRATION_SECRET } elseif ($env:SYNAPSE_REGISTRATION_SECRET) { $env:SYNAPSE_REGISTRATION_SECRET } else { '' }
+if ([string]::IsNullOrWhiteSpace($registrationSecret)) {
+    Log-Fail 'ERROR: SYNAPSE_REGISTRATION_SECRET is not set. Set it in .env (must match registration_shared_secret in synapse/homeserver.yaml).'
+    exit 1
+}
 $matrixBotUser = if ($envMap.MATRIX_BOT_USER) { $envMap.MATRIX_BOT_USER } else { 'turing-bot' }
 $matrixBotPass = if ($envMap.MATRIX_BOT_PASS) { $envMap.MATRIX_BOT_PASS } else { 'BotPass123!' }
 $matrixAdminUserId = '@{0}:localhost' -f $adminUser

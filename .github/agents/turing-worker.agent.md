@@ -26,7 +26,7 @@ You are a Base Worker specialist for Project Turing OS. You provide expertise on
 - Hermes ReAct agent implementation (Python)
 - Tool calling format (text-based `TOOL_CALL:` and native function calling)
 - Worker tool registry and tool implementation
-- Skill loading from `skills.sh` at startup
+- On-demand skill loading via `load_skills_for_task`
 - Matrix polling for admin messages
 - Health heartbeat to orchestrator
 - Worker cleanup and graceful shutdown
@@ -52,7 +52,7 @@ Worker Container (Ephemeral)
 │    (tool_registry.py)                           │
 │                                                 │
 │  Tools:                                         │
-│  ├── taiga_tools.py    (Ticket CRUD)           │
+│  ├── state_backend.py  (Ticket CRUD via Plane) │
 │  ├── bookstack_tools.py     (Documentation)         │
 │  ├── matrix_tools.py   (Messaging)             │
 │  ├── local_exec.py     (Sandboxed commands)   │
@@ -77,18 +77,23 @@ Orchestrator (3001)
 
 ### Tools (`base-worker/src/tools/`)
 
+Ticket tools live in `state_backend.py` (Plane) and are registered in `agent/hermes_loop.py`.
+
 | Tool | File | Capability |
 |------|------|------------|
-| `create_ticket` | `taiga_tools.py` | Create Taiga ticket |
-| `update_ticket_status` | `taiga_tools.py` | Change ticket status |
-| `add_comment` | `taiga_tools.py` | Add progress comment |
+| `create_ticket` | `state_backend.py` | Create Plane ticket |
+| `update_ticket_status` | `state_backend.py` | Change ticket status |
+| `add_comment` | `state_backend.py` | Add progress comment |
+| `read_ticket` | `state_backend.py` | Read ticket details |
+| `search_tickets` | `state_backend.py` | Search tickets |
 | `wiki_read` | `bookstack_tools.py` | Read BookStack docs |
 | `wiki_write` | `bookstack_tools.py` | Write BookStack content |
 | `send_matrix_message` | `matrix_tools.py` | Send to Matrix room |
 | `poll_matrix_inbox` | `matrix_tools.py` | Poll for messages |
 | `execute_command` | `local_exec.py` | Sandboxed shell commands |
 | `research_with_context7` | `research_tools.py` | Tech research |
-| `register_tool` | `tool_registry.py` | Persistent tool storage |
+
+`register_tool` is not a worker tool — it is a `HermesAgent` method (`agent/hermes_loop.py`) used by `command_executor.py` and `tool_registry.py` to wire callables into the loop. Persistent (shared) tool storage is handled by `tool_registry.py` via the BookStack gateway.
 
 ## Tool Calling Convention
 
@@ -121,13 +126,12 @@ ARGUMENTS: {"library_name": "fastapi", "topic": "authentication"}
 
 ## Skill Loading
 
-Workers load skills at startup based on role:
+Workers load skills on demand via `load_skills_for_task` (`base-worker/src/tools/research_tools.py`, also invoked from `command_executor.py`):
 
 ```python
-def _load_startup_skills(agent, role: str):
-    """Load default skills from skills.sh based on role"""
-    # Skills determine agent capabilities
-    # Loaded from: roles/languages/*.md, roles/specializations/*.md
+# Skills determine agent capabilities for a task.
+# Loaded from role/skill markdown via load_skills_for_task(skill_names).
+result = load_skills_for_task("python,testing")
 ```
 
 ## Health Monitoring
@@ -151,17 +155,27 @@ Worker ↔ Matrix: Admin messages via polling
 WRONG: Worker ↔ Worker direct communication
 ```
 
+Admin→worker messages arrive via the HTTP inbox (`/webhooks/worker-inbox/:ticketId`),
+which is the **source of truth**. When `WORKER_NATS_SUBSCRIBE=true`, the worker also
+drains a NATS inbox (the orchestrator dual-publishes admin commands to NATS), but HTTP
+polling stays authoritative.
+
 ## Environment Variables
+
+Workers access external services through the orchestrator gateway using
+`GATEWAY_URL` + `CONSUMER_TOKEN` — they do **not** hold raw API keys (LLM,
+Plane, BookStack, Matrix, GitHub keys live in the orchestrator vault).
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `TICKET_ID` | - | Current task ticket |
 | `ROLE` | `default` | Worker role (SE, QA, DevOps...) |
-| `LLM_API_KEY` | - | API key for LLM |
-| `LLM_PROVIDER` | `openai` | openai/anthropic/minimax |
+| `GATEWAY_URL` | - | Orchestrator gateway base URL (`/gateway/<service>/...`) |
+| `CONSUMER_TOKEN` | - | Bearer token for gateway access (no raw API keys in worker) |
 | `LLM_MODEL` | `gpt-4o` | Model to use |
 | `ORCHESTRATOR_URL` | `http://turing-orchestrator:3001` | Orchestrator endpoint |
 | `MATRIX_ROOM_ID` | - | Worker's Matrix room |
+| `WORKER_NATS_SUBSCRIBE` | `false` | Opt into NATS inbox subscriber (HTTP poll remains source of truth) |
 
 ## Debugging Tips
 

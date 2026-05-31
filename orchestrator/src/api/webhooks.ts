@@ -2,8 +2,15 @@
 // require ADMIN_API_TOKEN via the `requireAdmin` middleware. The Plane webhook
 // (`/plane`) is guarded by `verifyPlaneSignature` when PLANE_WEBHOOK_SECRET is set.
 // Worker→orchestrator routes (`/blocked`, `/completed`, `/worker-message`,
-// `/health/*`, `/checkpoint`, `/worker-inbox/*`) require WORKER_INTERNAL_TOKEN
-// when set; until then they remain open for transitional deployments.
+// `/health/*`, `/checkpoint`, `/worker-inbox/*`) require a worker credential
+// (per-ticket CONSUMER_TOKEN JWT, or the legacy WORKER_INTERNAL_TOKEN when set)
+// via the `requireWorker` middleware.
+// SECURITY(P2-5): the path-param inbox routes (`/worker-inbox/:ticketId`,
+// `/worker-inbox/:ticketId/drain`, `/worker-inbox/:ticketId/peek`) are
+// TICKET-BOUND — `requireWorker` rejects (403) a JWT whose `meta.ticketId`
+// does not match the requested `:ticketId`, so a worker cannot read/destroy
+// another worker's admin inbox. The body-param routes above identify their
+// ticket via `ticket_id` in the JSON body and are NOT yet bound (follow-up).
 
 import { Router, Request, Response, RequestHandler } from 'express';
 import { DockerService } from '../core/docker';
@@ -31,7 +38,7 @@ function mirrorToNats(
   natsService.publish(subject, { ticketId, role, ...payload, ts: Date.now() }).catch(() => undefined);
 }
 
-const TICKET_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,63}$/;
+const TICKET_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/;
 
 // Cap admin-question timeout at 1h. Workers should not be able to keep a
 // pending question alive indefinitely (memory + UX).
@@ -39,6 +46,162 @@ const MAX_QUESTION_TIMEOUT_SECONDS = 3600;
 
 function isValidTicketId(value: unknown): value is string {
   return typeof value === 'string' && TICKET_ID_PATTERN.test(value);
+}
+
+// ─── Shared admin-command logic ───────────────────────────────────────────
+// Single source of truth for the slash-commands that admins can run, used by
+// BOTH the HTTP `POST /webhooks/matrix` route (which returns the JSON payload
+// + status) and the Matrix chat command handler (which posts the human text
+// back into the room). Keeping one implementation avoids drift between the two
+// surfaces.
+
+export interface AdminCommandResult {
+  /** HTTP status the JSON route should return. */
+  status: number;
+  /** JSON payload for the HTTP route. */
+  json: Record<string, unknown>;
+  /** Human-readable text for the Matrix chat reply. */
+  text: string;
+}
+
+export interface AdminCommandDeps {
+  registry: WorkerRegistry;
+  docker: DockerService;
+  healthMonitor: HealthMonitor;
+}
+
+const ADMIN_COMMAND_HELP = [
+  'Available commands:',
+  '• /status — list active workers and their health',
+  '• /timeout-status — show pending admin questions',
+  '• /unblock <ticketId> — restart a blocked worker',
+  '• /kill <ticketId> — kill a worker and remove it',
+  '• /help — show this list',
+].join('\n');
+
+/**
+ * Run an admin slash-command and return a result usable by either the HTTP
+ * route or the Matrix chat handler. This function does NOT enforce auth — the
+ * caller is responsible (HTTP route via requireAdmin middleware; chat handler
+ * via the admin-sender check).
+ */
+export async function handleAdminCommand(
+  command: string,
+  args: string[],
+  deps: AdminCommandDeps,
+): Promise<AdminCommandResult> {
+  const { registry, docker, healthMonitor } = deps;
+  const ticket_id = args[0];
+
+  if (command === '/help') {
+    return { status: 200, json: { help: ADMIN_COMMAND_HELP }, text: ADMIN_COMMAND_HELP };
+  }
+
+  if (command === '/unblock') {
+    if (!ticket_id) {
+      return {
+        status: 400,
+        json: { error: 'Usage: /unblock <ticketId>' },
+        text: '❌ Usage: `/unblock <ticketId>`',
+      };
+    }
+
+    const worker = registry.lookupByTicket(ticket_id);
+    if (!worker) {
+      return {
+        status: 404,
+        json: { error: `Ticket ${ticket_id} not found in registry` },
+        text: `❌ Ticket \`${ticket_id}\` not found in registry.`,
+      };
+    }
+
+    registry.updateStatus(ticket_id, 'PENDING');
+
+    try {
+      const restarted = await docker.restartWorker(ticket_id, worker.role, worker.roomId || '');
+      if (!restarted) {
+        return {
+          status: 500,
+          json: { error: 'Failed to restart worker (no role to recreate from)' },
+          text: `❌ Failed to restart worker \`${ticket_id}\`.`,
+        };
+      }
+      registry.updateStatus(ticket_id, 'RUNNING');
+      return {
+        status: 200,
+        json: { message: 'Worker restarted', ticket_id },
+        text: `✅ Worker \`${ticket_id}\` restarted.`,
+      };
+    } catch (error) {
+      console.error(`[AdminCommand] Failed to restart worker for ${ticket_id}:`, error);
+      return {
+        status: 500,
+        json: { error: 'Failed to restart worker' },
+        text: `❌ Failed to restart worker \`${ticket_id}\`.`,
+      };
+    }
+  }
+
+  if (command === '/status') {
+    const workers = registry.listActive();
+    const health = await healthMonitor.getHealthSummary();
+    const lines = workers.length
+      ? workers.map((w) => {
+          const h = health.find((x: any) => x.ticketId === w.ticketId);
+          return `• \`${w.ticketId}\` (${w.role}) — ${w.status}${h ? ` / ${h.status}` : ''}`;
+        })
+      : ['No active workers.'];
+    return {
+      status: 200,
+      json: { workers, health },
+      text: [`📊 **Status** (${workers.length} active)`, ...lines].join('\n'),
+    };
+  }
+
+  if (command === '/timeout-status') {
+    const pending = matrixService.getPendingQuestions();
+    const lines = pending.length
+      ? pending.map((q) => `• \`${q.ticketId}\` — ${q.overdue ? 'OVERDUE' : `${Math.round(q.remainingMs / 1000)}s left`}`)
+      : ['No pending questions.'];
+    return {
+      status: 200,
+      json: { pending_questions: pending, timestamp: Date.now() },
+      text: [`⏱️ **Pending questions** (${pending.length})`, ...lines].join('\n'),
+    };
+  }
+
+  if (command === '/kill') {
+    if (!ticket_id) {
+      return {
+        status: 400,
+        json: { error: 'Usage: /kill <ticketId>' },
+        text: '❌ Usage: `/kill <ticketId>`',
+      };
+    }
+
+    try {
+      await docker.killWorker(ticket_id);
+      registry.remove(ticket_id);
+      matrixService.unregisterWorkerRoom(ticket_id);
+      return {
+        status: 200,
+        json: { message: 'Worker killed', ticket_id },
+        text: `💀 Worker \`${ticket_id}\` killed.`,
+      };
+    } catch (error) {
+      return {
+        status: 500,
+        json: { error: 'Failed to kill worker' },
+        text: `❌ Failed to kill worker \`${ticket_id}\`.`,
+      };
+    }
+  }
+
+  return {
+    status: 400,
+    json: { error: `Unknown command: ${command}` },
+    text: `❌ Unknown command: \`${command}\`\n\n${ADMIN_COMMAND_HELP}`,
+  };
 }
 
 export function webhooksRouter(
@@ -404,47 +567,11 @@ export function webhooksRouter(
     }
 
     const { command, args } = commandData;
-    const ticket_id = args[0];
 
     console.log(`[Webhook] Matrix command: ${command}, args=${args.join(', ')}`);
 
-    if (command === '/unblock' && ticket_id) {
-      const worker = registry.lookupByTicket(ticket_id);
-      if (!worker) {
-        return res.status(404).json({ error: `Ticket ${ticket_id} not found in registry` });
-      }
-
-      registry.updateStatus(ticket_id, 'PENDING');
-
-      try {
-        await docker.restartWorker(ticket_id, worker.role, worker.roomId || '');
-        registry.updateStatus(ticket_id, 'RUNNING');
-        res.status(200).json({ message: 'Worker restarted', ticket_id });
-      } catch (error) {
-        console.error(`[Webhook] Failed to restart worker for ${ticket_id}:`, error);
-        res.status(500).json({ error: 'Failed to restart worker' });
-      }
-    } else if (command === '/status') {
-      const workers = registry.listActive();
-      const health = healthMonitor.getHealthSummary();
-      res.status(200).json({ workers, health });
-    } else if (command === '/timeout-status') {
-      res.status(200).json({
-        pending_questions: matrixService.getPendingQuestions(),
-        timestamp: Date.now(),
-      });
-    } else if (command === '/kill' && ticket_id) {
-      try {
-        await docker.killWorker(ticket_id);
-        registry.remove(ticket_id);
-        matrixService.unregisterWorkerRoom(ticket_id);
-        res.status(200).json({ message: 'Worker killed', ticket_id });
-      } catch (error) {
-        res.status(500).json({ error: 'Failed to kill worker' });
-      }
-    } else {
-      res.status(400).json({ error: `Unknown command: ${command}` });
-    }
+    const result = await handleAdminCommand(command, args, { registry, docker, healthMonitor });
+    res.status(result.status).json(result.json);
   });
 
   // ─── Matrix routing status ────────────────────────────────────────────
@@ -565,8 +692,8 @@ export function webhooksRouter(
   });
 
   // ─── Health status endpoint ────────────────────────────────────────────
-  router.get('/health/status', (_req: Request, res: Response) => {
-    const summary = healthMonitor.getHealthSummary();
+  router.get('/health/status', async (_req: Request, res: Response) => {
+    const summary = await healthMonitor.getHealthSummary();
     res.json({ workers: summary, timestamp: Date.now() });
   });
 

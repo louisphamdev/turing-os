@@ -69,7 +69,11 @@ PO → PM → HR → Workers (SE, QA, DevOps, Data, Security, ...)
 
 ## Skill Loading
 
-Role-based skill sets loaded from `skills.sh` on worker startup. Skills determine agent capabilities per role.
+Role-based skills are loaded on demand via `load_skills_for_task` (`base-worker/src/tools/research_tools.py`, also invoked from `command_executor.py`). Skills determine agent capabilities per role.
+
+## Messaging / Inbox
+
+Admin→worker messages are written to the worker's HTTP inbox (`/webhooks/worker-inbox/:ticketId`), which is the **source of truth**. The orchestrator also dual-publishes those events to NATS; a worker can opt into a NATS subscriber by setting `WORKER_NATS_SUBSCRIBE=true` (see `base-worker/src/tools/nats_client.py`), but HTTP polling remains authoritative.
 
 ## Common Tasks
 

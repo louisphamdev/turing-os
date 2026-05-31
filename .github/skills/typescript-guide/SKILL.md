@@ -22,7 +22,11 @@ This skill covers TypeScript development for the orchestrator:
 | `express` | HTTP server | `import express from 'express'` |
 | `dockerode` | Docker API | `import Docker from 'dockerode'` |
 | `jsonwebtoken` | JWT auth | `import jwt from 'jsonwebtoken'` |
-| `axios` | HTTP client | `import axios from 'axios'` |
+| `redis` | Cache / state | `import { createClient } from 'redis'` |
+| `nats` | Messaging | `import { connect } from 'nats'` |
+
+There is no third-party HTTP client (no `axios`); outbound calls use the
+built-in `fetch`.
 
 ## Express Patterns
 
@@ -32,10 +36,10 @@ This skill covers TypeScript development for the orchestrator:
 import { Router } from 'express';
 const router = Router();
 
-router.post('/taiga', async (req, res) => {
+router.post('/plane', async (req, res) => {
   try {
     const event = req.body;
-    // Handle Taiga webhook
+    // Handle Plane webhook (ticket → worker provisioning)
     res.json({ status: 'ok' });
   } catch (err) {
     console.error('[Webhook] Error:', err);
@@ -61,18 +65,17 @@ router.get('/workers', async (req, res, next) => {
 
 ### Request Validation
 ```typescript
-interface TaigaWebhookPayload {
-  action: string;
-  type: string;
-  data: {
-    id: number;
-    subject: string;
-    status: string;
-  };
+interface PlaneWebhookPayload {
+  ticket_id: string;
+  status?: string;
+  state?: { group?: string; name?: string };
+  role?: string;
+  priority?: string;
+  description?: string;
 }
 
-router.post('/webhooks/taiga', (req, res) => {
-  const payload = req.body as TaigaWebhookPayload;
+router.post('/plane', (req, res) => {
+  const payload = req.body as PlaneWebhookPayload;
   // TypeScript knows the shape of payload
 });
 ```

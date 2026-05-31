@@ -21,6 +21,7 @@ export class RateLimiter {
   constructor() {
     // Cleanup stale entries every 5 minutes
     this.cleanupInterval = setInterval(() => this.cleanup(), 5 * 60 * 1000);
+    this.cleanupInterval.unref?.();
   }
 
   /**
@@ -142,7 +143,13 @@ export class RateLimiter {
   shutdown(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
     }
+  }
+
+  /** Alias for shutdown() — stops the cleanup timer. */
+  stop(): void {
+    this.shutdown();
   }
 }
 

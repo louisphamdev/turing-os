@@ -13,8 +13,6 @@ gateway proxy using consumer tokens instead of direct API access.
 import os
 import json
 import re
-import asyncio
-import time
 import requests
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
@@ -164,7 +162,6 @@ class HermesAgent:
         research_tools.init_research_tools()
 
         # ─── Checkpoint / Recovery Tools ─────────────────────────────────
-        from checkpoint import CheckpointManager
         self._checkpoint_manager = None  # Set externally via set_checkpoint_manager()
         self.register_tool('save_checkpoint', self._save_checkpoint_tool)
         self.register_tool('load_checkpoint', self._load_checkpoint_tool)
@@ -184,16 +181,34 @@ class HermesAgent:
     def run_interactive(self, user_message: str) -> tuple:
         """
         Run agent in interactive chat mode with custom system prompt.
-        Returns tuple of (result_str, response_content)
+
+        Mirrors the tool-handling loop of run(): the LLM may answer directly
+        OR emit one or more TOOL_CALLs. Tool calls are executed, their results
+        fed back, and the loop continues until the model produces a plain
+        answer (no tool calls) or BLOCKED — at which point that answer is
+        returned to the admin. This is what lets chat mode actually run tools
+        instead of echoing raw "TOOL_CALL:" text back to the user.
+
+        Returns tuple of (status, response_content) where status is one of
+        'done', 'blocked', or 'max_iterations'.
         """
         print(f"[Hermes] Starting interactive session for role: {self.role}")
 
-        # Use custom system prompt if set
+        # Use custom system prompt if set, but always ensure the tool-call
+        # format + available tools are present so the model can emit parseable
+        # TOOL_CALLs. A bare conversational prompt (the index.py default) does
+        # not teach the model the TOOL_CALL/ARGUMENTS contract on its own.
         if self.system_prompt_override:
             system_prompt = self.system_prompt_override
+            if 'TOOL_CALL:' not in system_prompt:
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    f"## Available Tools\n{self._build_tools_schema()}\n\n"
+                    f"{self._tool_format_instructions()}"
+                )
         else:
             system_prompt = self._build_system_prompt()
-        
+
         self.messages.append(AgentMessage(role='system', content=system_prompt))
         self._add_message('user', user_message)
 
@@ -210,20 +225,20 @@ class HermesAgent:
             content = response.get('content', '') or response.get('text', '')
             self._add_message('assistant', content)
 
-            # For interactive mode, return the response content
-            if iteration == 0 and content:
-                print(f"[Hermes] ✓ Response generated")
-                return ('done', content)
-
-            # Parse and execute tool calls
+            # Parse tool calls BEFORE deciding whether we're done — the model
+            # may have replied with a TOOL_CALL rather than a plain answer.
             tool_calls = self._parse_tool_calls(response)
 
+            # No tool calls → this is the model's plain answer. Strip any
+            # DONE: marker for a cleaner reply and return it to the admin.
             if not tool_calls:
-                print("[Hermes] No tool calls in response, continuing...")
-                if iteration == self.max_iterations - 1:
-                    return ('done', content)  # Return content even without tools
-                continue
+                print("[Hermes] ✓ Response generated (no tool calls)")
+                if self._check_blocked_signal(content):
+                    return ('blocked', content)
+                return ('done', self._strip_done_marker(content))
 
+            # Tool calls present → execute them, feed results back, and loop so
+            # the model can use the results to produce a final answer.
             for tool_call in tool_calls:
                 result = self._execute_tool(tool_call)
                 result_str = str(result.result) if result.success else f"ERROR: {result.error}"
@@ -233,7 +248,7 @@ class HermesAgent:
 
             if self._is_task_complete():
                 print("[Hermes] ✓ Task status indicates completion")
-                return ('done', content)
+                return ('done', self._strip_done_marker(content))
 
         print(f"[Hermes] Max iterations ({self.max_iterations}) reached")
         return ('max_iterations', None)
@@ -374,11 +389,19 @@ Use `notify_admin` for progress updates or non-blocking notifications.
 ## Available Tools
 {tools_schema}
 
-## Response Format
+{self._tool_format_instructions()}"""
+
+    def _tool_format_instructions(self) -> str:
+        """The shared TOOL_CALL/ARGUMENTS format spec.
+
+        Reused by both the non-interactive system prompt and the interactive
+        chat prompt so the model always knows how to emit parseable tool calls.
+        """
+        return """## Response Format
 When you need to call a tool, respond with:
 ```
 TOOL_CALL: tool_name
-ARGUMENTS: {{"arg1": "value1", "arg2": "value2"}}
+ARGUMENTS: {"arg1": "value1", "arg2": "value2"}
 ```
 
 You may call multiple tools in one response.
@@ -392,6 +415,20 @@ If blocked and need human intervention:
 ```
 BLOCKED: <reason you cannot proceed>
 ```"""
+
+    def _strip_done_marker(self, content: str) -> str:
+        """Remove a leading 'DONE:' marker so the user sees a clean answer.
+
+        The model is told to wrap completions in 'DONE: <summary>'. In chat
+        mode we surface the summary itself, not the marker.
+        """
+        if not content:
+            return content
+        m = re.search(r'^DONE:\s*(.*)', content, re.DOTALL | re.MULTILINE)
+        if m:
+            stripped = m.group(1).strip()
+            return stripped if stripped else content
+        return content
 
     def _build_tools_schema(self) -> str:
         """Build tool schema for the prompt"""

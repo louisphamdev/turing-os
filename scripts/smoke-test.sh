@@ -21,7 +21,10 @@ echo ""
 
 PASS=0
 FAIL=0
-EXPECTED_SERVICES=13
+# Current stack (docker-compose.yml) has 16 services, but plane-migrator is a
+# one-shot job (restart: "no") that exits after migrations, so only ~15 stay
+# running. The check uses -ge, so this is a lenient lower bound.
+EXPECTED_SERVICES=15
 
 # Test 1: Docker running
 echo -n "Checking Docker... "
@@ -54,13 +57,13 @@ else
     ((FAIL++))
 fi
 
-# Test 4: Taiga API
-echo -n "Checking Taiga API... "
-if curl -s http://localhost:9000/api/v1/ &>/dev/null; then
-    log "Taiga API responding"
+# Test 4: Plane (proxy on host port 9000)
+echo -n "Checking Plane... "
+if curl -fsS http://localhost:9000 &>/dev/null; then
+    log "Plane responding"
     ((PASS++))
 else
-    fail "Taiga API not responding"
+    fail "Plane not responding"
     ((FAIL++))
 fi
 
@@ -74,13 +77,22 @@ else
     ((FAIL++))
 fi
 
-# Test 6: Matrix/Synapse
+# Test 6: Matrix/Synapse (bound to 127.0.0.1:8008 after hardening)
 echo -n "Checking Matrix/Synapse... "
-if curl -fsS http://localhost:8008/_matrix/client/versions &>/dev/null; then
+if curl -fsS http://127.0.0.1:8008/_matrix/client/versions &>/dev/null; then
     log "Matrix accessible"
     ((PASS++))
 else
     warn "Matrix not accessible (may be first-time setup)"
+fi
+
+# Test 6b: Element web UI
+echo -n "Checking Element... "
+if curl -fsS http://localhost:8080 &>/dev/null; then
+    log "Element accessible"
+    ((PASS++))
+else
+    warn "Element not accessible (may be first-time setup)"
 fi
 
 # Test 7: Orchestrator health
@@ -127,7 +139,7 @@ if [ $FAIL -eq 0 ]; then
     echo -e "${GREEN}All tests passed! Turing OS is ready.${NC}"
     echo ""
     echo "Next steps:"
-    echo "  1. Create a ticket in Taiga: http://localhost:9000"
+    echo "  1. Create a ticket in Plane: http://localhost:9000"
     echo "  2. Watch worker execute: make logs"
     echo "  3. View status: make status"
     exit 0

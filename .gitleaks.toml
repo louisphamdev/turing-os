@@ -1,0 +1,51 @@
+# Gitleaks configuration for Turing OS.
+#
+# IMPORTANT — scan mode:
+#   CI runs gitleaks in NO-GIT (filesystem) mode against the *working tree*:
+#       gitleaks detect --no-git --source . --config .gitleaks.toml
+#   This is deliberate. The repo's git HISTORY still contains real secrets that
+#   were recently replaced with placeholders in the working tree but NOT purged
+#   from history. A default history scan would therefore fail. The history must
+#   be purged (git filter-repo / BFG) and all affected secrets rotated before
+#   any public release — see CONTRIBUTING.md ("Secret hygiene & git history").
+#
+# This config extends the built-in gitleaks ruleset and adds an allowlist for
+# the known-safe matches in the current working tree (placeholders, test
+# fixtures, vendored dependencies, lockfile hashes).
+
+title = "Turing OS gitleaks config"
+
+[extend]
+# Inherit gitleaks' default rules, then layer the allowlist below on top.
+useDefault = true
+
+[allowlist]
+description = "Known-safe placeholders, test fixtures, and vendored files"
+
+# Paths that are not first-party source or only contain placeholders/fixtures.
+# NB: gitleaks reports OS-native separators (\ on Windows, / on Linux/CI), so
+# every separator below is written as [/\\] to match in both environments.
+paths = [
+  # Vendored dependencies — third-party test keys/fixtures, not our secrets.
+  '''(^|[/\\])node_modules[/\\]''',
+  # Lockfile integrity hashes look like secrets but are not.
+  '''(^|[/\\])package-lock\.json$''',
+  # Example env file ships placeholders only (sk-your-api-key-here,
+  # change-me-in-production, etc.) — real values live in a git-ignored .env.
+  '''(^|[/\\])\.env\.example$''',
+  # Test bootstrap injects throwaway 32-char env values for Jest.
+  '''(^|[/\\])jest\.setup\.js$''',
+]
+
+# Literal placeholder/test strings that may appear in tracked docs/config.
+regexes = [
+  '''change-me(-in-production)?''',
+  '''your-[a-z0-9-]*-(api-)?(key|token)(-here)?''',
+  '''sk-your-api-key-here''',
+  '''test-(jwt|vault)-[a-z0-9-]+''',
+  '''test-key''',
+  '''some_random_key_change_in_production''',
+  # The credential-vault skill doc describes "AES-256-encrypted secret store"
+  # in prose; not an actual key.
+  '''AES-256-encrypted''',
+]

@@ -255,7 +255,7 @@ def report_project_health() -> str:
             lines.append(f"  - `{t.get('id')}` [{t.get('priority')}]: {t.get('subject', '')[:60]}")
     
     lines.append("")
-    lines.append(f"_Report generated_")
+    lines.append("_Report generated_")
     
     return "\n".join(lines)
 

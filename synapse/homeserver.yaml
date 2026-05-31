@@ -27,14 +27,21 @@ database:
     database: /data/homeserver.db
 log_config: "/data/localhost.log.config"
 media_store_path: /data/media_store
-registration_shared_secret: "IL+TIxnDlZ5luaR::1i^cx*HBX,Mu10m9+iI4,U5EC1Xr:3B5x"
+# Shared secret for /_synapse/admin/v1/register (admin/bot bootstrap).
+# DO NOT commit a real secret. Generate one with:  openssl rand -hex 32
+# Keep this value in sync with SYNAPSE_REGISTRATION_SECRET in .env (the .ps1
+# bootstrap reads the secret from .env; init-admin-users.sh reads the live value
+# back out of this file inside the running container).
+registration_shared_secret: "CHANGE_ME_GENERATE_WITH_openssl_rand_hex_32"
 report_stats: false
-macaroon_secret_key: "URQ2^5f3A=7AeOjMM+otPhY_NdJH;2ti73ysY@.rH1S3b*Ngr-"
-form_secret: "zjJG6#FZ5yNs@AQS53T6wfJ=,4dUo#@6ds5asr6Kw5IafGW:nG"
+# REQUIRED: generate a unique value, e.g. openssl rand -hex 32
+macaroon_secret_key: "CHANGE_ME_GENERATE_WITH_openssl_rand_hex_32"
+# REQUIRED: generate a unique value, e.g. openssl rand -hex 32
+form_secret: "CHANGE_ME_GENERATE_WITH_openssl_rand_hex_32"
 signing_key_path: "/data/localhost.signing.key"
 trusted_key_servers:
   - server_name: "matrix.org"
 
 
-enable_registration: true
-enable_registration_without_verification: true
+enable_registration: false
+enable_registration_without_verification: false

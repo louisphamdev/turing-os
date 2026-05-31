@@ -1,7 +1,6 @@
 """Unit tests for the worker NATS client helpers (phase 2 of Matrix->NATS)."""
 
 import importlib
-import os
 import sys
 
 

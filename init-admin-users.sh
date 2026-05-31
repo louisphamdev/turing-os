@@ -25,7 +25,10 @@ fi
 ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASSWORD}"
 SYNAPSE_API_URL="${SYNAPSE_API_URL:-http://localhost:8008}"
-REGISTRATION_SECRET="${SYNAPSE_REGISTRATION_SECRET:-f643143e19d68d088741f6ca465894bb6964ca284b5d2c58a8dcc3348750f4e4}"
+# No baked-in secret. Require it from the environment / .env. The live value is
+# read back out of the running container below; that path still wins when set.
+: "${SYNAPSE_REGISTRATION_SECRET:?Set SYNAPSE_REGISTRATION_SECRET in .env (must match registration_shared_secret in synapse/homeserver.yaml)}"
+REGISTRATION_SECRET="${SYNAPSE_REGISTRATION_SECRET}"
 MATRIX_BOT_USER="${MATRIX_BOT_USER:-turing-bot}"
 MATRIX_BOT_PASS="${MATRIX_BOT_PASS:-BotPass123!}"
 

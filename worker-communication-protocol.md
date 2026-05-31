@@ -482,7 +482,7 @@ async function _handleDead(ticketId: string) {
   // 2. Kill old container
   await docker.killWorker(ticketId);
 
-  // 3. Doctor diagnosis (BEFORE respawn) — Crown Jewel
+  // 3. Doctor diagnosis (BEFORE respawn) — experimental fix-execution
   doctorResult = await _invokeDoctorForWorkerDeath(ticketId, role);
   // Doctor identifies root cause (OOM, crash, dependency issue)
   // If fixable: fix is applied before respawn

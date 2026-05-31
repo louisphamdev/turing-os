@@ -1,7 +1,6 @@
 ---
 name: doctor-tools-guide
 description: **SKILL** — Advanced Doctor Agent tool-building guide. Use when: generating new fix scripts dynamically, patching config files (.env, docker-compose.yml), invoking cross-worker tools, creating self-healing tools on-the-fly. Triggers: "tạo tool mới", "fix config", "sinh tool tự động", "gọi tool worker khác", "dynamic tool creation", "patch config"
-file: d:\Source\Project_Turing\turing-os\.github\skills\doctor-tools-guide\SKILL.md
 ---
 
 # Doctor Tools Guide — Dynamic Tool Building & Config Patching
@@ -51,9 +50,8 @@ Doctor có thể patch trực tiếp các file config khi lỗi do misconfigurat
 |------|---------------------|
 | `.env` | Add/change/remove env vars |
 | `docker-compose.yml` | Change image, ports, environment, restart policy |
-| `taiga.env` | Change Taiga-specific settings |
+| `docker-compose.override.yml` | Local overrides (restart policy, limits) |
 | `synapse/homeserver.yaml` | Change Matrix/Synapse settings |
-| `BookStack` config | Via BookStack API |
 
 ### Ví dụ: Patch .env
 
@@ -103,7 +101,7 @@ TOOL_CALL: invoke_worker_tool
 ARGUMENTS: {
   "target_role": "devops",
   "tool_name": "scale_worker",
-  "arguments": {"service": "taiga", "replicas": 3}
+  "arguments": {"service": "plane", "replicas": 3}
 }
 ```
 
@@ -188,15 +186,15 @@ ARGUMENTS: {
 }
 ```
 
-### 5.2 Fix Taiga Secret
+### 5.2 Fix Worker Timeout Setting
 
 ```python
 TOOL_CALL: patch_config_file
 ARGUMENTS: {
-  "file_path": "taiga.env",
+  "file_path": ".env",
   "operation": "set",
-  "key": "TAIGA_SECRET_KEY",
-  "value": "auto-generated-$(date +%s)"
+  "key": "WORKER_TIMEOUT",
+  "value": "600"
 }
 ```
 

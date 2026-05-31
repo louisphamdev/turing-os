@@ -23,9 +23,8 @@ This file registers custom agents for Project Turing OS.
 | `gateway-proxy` | [.github/skills/gateway-proxy/SKILL.md](.github/skills/gateway-proxy/SKILL.md) | Gateway: vault, consumer tokens, BookStack |
 | `docker-workflow` | [.github/skills/docker-workflow/SKILL.md](.github/skills/docker-workflow/SKILL.md) | Docker: container management, health, scaling |
 | `testing` | [.github/skills/testing/SKILL.md](.github/skills/testing/SKILL.md) | Testing: Jest, pytest, syntax validation |
-| `taiga-integration` | [.github/skills/taiga-integration/SKILL.md](.github/skills/taiga-integration/SKILL.md) | Taiga: ticket CRUD, webhooks, sprint management |
 | `research-tools` | [.github/skills/research-tools/SKILL.md](.github/skills/research-tools/SKILL.md) | Context7: tech research, documentation fetching |
-| `credential-vault` | [.github/skills/credential-vault/SKILL.md](.github/skills/credential-vault/SKILL.md) | BookStack vault: secret storage, credential rotation |
+| `credential-vault` | [.github/skills/credential-vault/SKILL.md](.github/skills/credential-vault/SKILL.md) | Credential vault: env-imported secrets, gateway proxy |
 
 ## Usage
 
@@ -48,7 +47,6 @@ This file registers custom agents for Project Turing OS.
 /gateway-proxy                  # Vault & consumer tokens
 /docker-workflow                # Container management
 /testing                        # Testing & validation
-/taiga-integration              # Ticket management
 /research-tools                 # Tech research
 /credential-vault               # Secrets management
 ```

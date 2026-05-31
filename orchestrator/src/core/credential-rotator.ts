@@ -70,6 +70,7 @@ export class CredentialRotator {
         console.error('[CredentialRotator] Rotation check failed:', err);
       });
     }, 60 * 60 * 1000); // 1 hour
+    this.rotationCheckInterval.unref?.();
 
     console.log('[CredentialRotator] Started rotation scheduler');
   }
@@ -286,6 +287,11 @@ export class CredentialRotator {
     }
     console.log('[CredentialRotator] Shutdown complete');
   }
+
+  /** Alias for shutdown() — consistent stop() entry point for graceful shutdown. */
+  stop(): void {
+    this.shutdown();
+  }
 }
 
 // Singleton
@@ -295,5 +301,14 @@ export function getCredentialRotator(): CredentialRotator {
   if (!rotatorInstance) {
     rotatorInstance = new CredentialRotator();
   }
+  return rotatorInstance;
+}
+
+/**
+ * Return the rotator singleton ONLY if it has already been created.
+ * Used by graceful shutdown so we never instantiate (and start a timer on)
+ * a rotator that was never in use.
+ */
+export function peekCredentialRotator(): CredentialRotator | null {
   return rotatorInstance;
 }

@@ -55,22 +55,24 @@ describe('IntentParser', () => {
 
 ## Worker Testing (Python/pytest)
 
+pytest is the worker test runner — CI runs `pytest -v` against `base-worker/tests/`.
+
 ```powershell
-# Run Python syntax check (no pytest installed yet)
+# Quick syntax check
 .venv\Scripts\python.exe -m py_compile base-worker\src\tools\matrix_tools.py
 
-# Run all Python tests (when added)
-python -m pytest base-worker/tests/
+# Run all Python tests (what CI runs)
+pytest -v
 
 # Run specific test
-python -m pytest base-worker/tests/test_tool_registry.py -v
+pytest base-worker/tests/test_tool_registry.py -v
 ```
 
 ### Test Files Location
 
 ```
 base-worker/tests/
-└── test_tool_registry.py
+└── (real pytest suites; conftest.py puts base-worker/ on sys.path)
 ```
 
 ## Validation Commands
@@ -78,10 +80,11 @@ base-worker/tests/
 ### Docker Configuration
 
 ```powershell
-# Validate compose file syntax
-docker compose -f docker-compose.yml config
+# `docker compose config` interpolates env vars, so seed a .env first
+# (CI does exactly this: `cp .env.example .env`).
+Copy-Item .env.example .env
 
-# Validate canonical stack
+# Validate compose file syntax
 docker compose -f docker-compose.yml config
 
 # Validate canonical stack + dev override
@@ -119,8 +122,8 @@ Test results are saved to:
 Before any commit, ensure:
 - [ ] `npm run build` passes in orchestrator
 - [ ] `npm test` passes in orchestrator
-- [ ] `docker compose config` validates
-- [ ] Python files compile without syntax errors
+- [ ] `pytest -v` passes for the worker (`base-worker/tests/`)
+- [ ] `cp .env.example .env` then `docker compose config` validates
 
 ## Related Files
 

@@ -39,6 +39,12 @@ synapse/media_store/
 synapse/*.signing.key
 synapse/*.log.config
 
+# Gateway runtime data (encrypted credential vault + audit logs — never commit)
+vault-data/
+audit-logs/
+orchestrator/vault-data/
+orchestrator/audit-logs/
+
 # Temporary files
 tmp/
 temp/

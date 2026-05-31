@@ -10,15 +10,12 @@ Communication Model:
 
 import os
 import sys
-import json
 import time as time_module
 import traceback
 import threading
-from queue import Queue
 
 # ─── Health Monitoring ────────────────────────────────────────────────────
 from health import start_health_monitor, stop_health_monitor
-import asyncio
 
 # ─── Configuration from Environment ──────────────────────────────────────
 TICKET_ID = os.environ.get('TICKET_ID')
@@ -322,11 +319,18 @@ def main():
             log("[Interactive] Entering bidirectional mode via orchestrator relay...")
             send_to_admin(f"👋 Hello! I'm the **{ROLE}** worker. Task finished ({result}). How can I help you?")
 
-            # System prompt for interactive chat
+            # System prompt for interactive chat.
+            # NOTE: run_interactive() automatically appends the available-tools
+            # schema and the TOOL_CALL/ARGUMENTS format spec when this prompt
+            # does not already contain "TOOL_CALL:", so the model knows how to
+            # actually invoke tools (not just describe them in prose).
             chat_system = f"""You are a helpful AI assistant for the {ROLE} role.
 You are chatting with a user (admin) via Matrix. Be conversational and helpful.
-When the user asks you to do something, use tools to accomplish the task.
-Always respond in a friendly manner.
+When the user asks you to do something that requires an action (reading/updating
+tickets, searching or editing documentation, running terminal commands, etc.),
+call the appropriate tool using the TOOL_CALL format described below — do NOT
+just describe the command in prose. After the tool result comes back, write a
+short, friendly natural-language answer summarising what you found or did.
 You have access to Plane (tickets), BookStack (documentation), and terminal commands."""
 
             # ── Optional NATS subscriber (Phase 2 dual-read) ────────────────

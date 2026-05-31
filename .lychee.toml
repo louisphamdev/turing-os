@@ -1,0 +1,37 @@
+# lychee link-checker configuration for Turing OS docs.
+#
+# Goal: catch dead RELATIVE links in the primary docs (README.md,
+# CONTRIBUTING.md, QUICKSTART.md) — e.g. a broken ./CONTRIBUTING.md or
+# docs/... reference. External/private URLs (badges, the project's own
+# github.com pages, license shields) are excluded because they can 404,
+# rate-limit, or require auth in CI and would make the gate flaky.
+#
+# To tighten later: drop entries from `exclude` to start verifying external
+# links too (consider keeping shields.io / badge hosts excluded).
+
+# This gate is scoped to RELATIVE links only — every external (http/https)
+# scheme is excluded. External links in these docs are either local service
+# URLs (http://localhost:NNNN, only reachable when the stack is running),
+# the project's own github.com pages (repo may be private / 404), badge/shield
+# images, or example endpoints (api.openai.com) — all of which would make the
+# gate flaky in CI. Relative links (./CONTRIBUTING.md, LICENSE, docs/...) are
+# still verified against the filesystem.
+#
+# To tighten later: narrow these excludes to start verifying real external
+# docs links (keep localhost / badges / example endpoints excluded).
+exclude = [
+  # Exclude every http/https URL — see note above. Relative/file links remain.
+  '^https?://',
+]
+
+# Also skip private / local / loopback hosts explicitly (belt and braces).
+exclude_loopback = true
+exclude_private = true
+
+# Be lenient about transient network issues for any link we DO check.
+max_retries = 2
+retry_wait_time = 2
+accept = ["200", "206", "429"]
+
+# Treat the docs as a set; resolve relative links from the repo root.
+# (lychee resolves relative links against each file's own directory.)

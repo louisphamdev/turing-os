@@ -31,6 +31,8 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 - Priority classification (P0-P3)
 - Creates tickets in **Plane** with automatic workflow
 
+> 🗺️ **Roadmap**: The full hierarchical delegation chain (PO → PM → HR → Workers) at ticket intake is not yet implemented. Today, the Plane webhook spawns a single worker of the payload's role (default `software-engineer`); the PO→PM delegation chain is currently enforced only for Matrix-chat routing.
+
 ### 2. Automated Software Development
 - **Workers** execute tasks using ReAct loop
 - Multi-language support: Python, JavaScript, TypeScript, Go, Rust, .NET, Java
@@ -41,7 +43,7 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 - **Matrix** enables real-time two-way communication between admin and workers
 - Admin sends messages in worker's Matrix room → routed to worker via orchestrator
 - Workers ask questions, send progress updates, request human input
-- Admin commands: `/status`, `/timeout-status`, `/unblock`, `/kill`, `/help`
+- Admin commands: `/status`, `/timeout-status`, `/unblock`, `/kill`, `/help` — ✅ typed directly in Element chat and dispatched by the orchestrator. Commands are **admin-authorized** (only the configured `MATRIX_ADMIN_USER_ID` may run them; other senders are rejected). The same handler also backs the authenticated HTTP admin-command endpoint.
 - **Element Web** provides a modern chat interface for admin interaction
 
 ### 4. Self-Healing & Monitoring
@@ -52,11 +54,13 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 - **Worker Checkpoint** — auto-saves every 5 iterations; compressed message history, iteration count, context
 - **Priority Queue**: Running, queued, and paused task state is exposed via orchestrator APIs
 - **Alert Manager**: Real-time monitoring of Docker lifecycle events (e.g., OOM kills) and system anomalies.
-- **Auto-Scaling**: Orchestrator dynamically scales workers up/down based on CPU/RAM utilization and idle thresholds.
-- **Doctor Agent**: See Section 5 for the full autonomous self-healing system.
+- **Auto-Scaling** 🧪 **Experimental**: Orchestrator scales workers based on CPU/RAM utilization and idle thresholds. Caveat: scale-up is currently capped to one worker per role, and scale-down stops the oldest running worker rather than the idle one.
+- **Doctor Agent**: See Section 5 for the Doctor diagnosis & self-healing system.
 
-### 5. Doctor Agent — Autonomous Self-Healing (NEW) 🌟
-Doctor is Turing OS's **autonomous system doctor** — a specialized worker that runs 24/7, diagnoses failures, heals the system, and learns from every incident. It is the **crown jewel** differentiator of Turing OS.
+### 5. Doctor Agent — System Diagnostics & Self-Healing (NEW)
+Doctor is Turing OS's **system doctor** — a specialized worker that runs 24/7, diagnoses failures, and reports on the health of the system. It is a key differentiator of Turing OS.
+
+> 🧪 **Experimental** — Diagnostics are functional today: health checks, log parsing, service-connectivity probes, and container discovery (via the orchestrator relay) all work. Automated **fix execution** is a 🗺️ roadmap item: in the shipped Linux worker image the fix scripts are PowerShell-only (`.ps1`, not present/COPYed), there is no Docker CLI/socket inside the container, the known-issues lookup targets a BookStack endpoint that does not exist, and credentials are not yet injected. The diagram below describes the intended closed loop, not all of which executes in the current Linux image.
 
 #### What Doctor Does
 
@@ -87,7 +91,7 @@ Error detected ──► Doctor triages ──► Diagnoses root cause
                                     System restored ──► Learns & tracks
 ```
 
-#### Doctor Tool Suite (23 tools)
+#### Doctor Tool Suite (21 tools)
 
 | Tool | Capability |
 |------|-----------|
@@ -103,7 +107,7 @@ Error detected ──► Doctor triages ──► Diagnoses root cause
 | `track_metrics()` | Record success/failure rates to BookStack |
 | `get_doctor_dashboard()` | Full system summary |
 | `ask_user_confirmation()` | Yes/no questions to admin via Matrix |
-| `run_self_healing_pipeline()` | **CROWN JEWEL** — full diagnose→fix→track workflow |
+| `run_self_healing_pipeline()` | Full diagnose→fix→track workflow (🧪 fix steps experimental — see note above) |
 | `run_full_remediation()` | Full auto-remediation trying ALL approaches |
 | `create_dynamic_fix_script()` | Generate new fix scripts on-the-fly with syntax verification |
 | `patch_config_file()` | Patch `.env`, YAML, JSON in-place — no restart needed |
@@ -143,7 +147,6 @@ Doctor (in container) ── GET /containers ──────────► O
 - **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Plane, BookStack, Matrix) is routed through the orchestrator.
 - **Credential Vault & Consumer Tokens**: Workers authenticate using short-lived JWT tokens rather than direct API keys.
 - **Role-Based Access Control (RBAC)**: Fine-grained permissions per role (e.g., `software-engineer` can write code, `qa` can only read).
-- **Intent Parser**: LLM-powered module that reliably translates natural language admin commands via Matrix into structured actions.
 
 #### Required environment variables
 
@@ -169,19 +172,21 @@ See `.env.example` for the full list.
 
 | Feature | HiClaw | Turing OS | Improvement |
 |---------|--------|-----------|-------------|
-| **Architecture** | Flat (Manager-Worker) | Hierarchy (PO→PM→HR→Workers) | ✅ Clearer separation |
+| **Architecture** | Flat (Manager-Worker) | Hierarchy (PO→PM→HR→Workers) 🗺️ | ✅ Clearer separation (full intake delegation roadmap) |
 | **Priority System** | ❌ None | ✅ P0-P3 with interrupt | ✅ Urgent requests handled |
 | **Idempotency** | ❌ None | ✅ Registry-based deduplication | ✅ No duplicates |
-| **Resource Scaling** | Manual | PM-controlled auto-scaling | ✅ Dynamic |
-| **PM Failover** | ❌ None | ✅ Doctor-managed | ✅ No SPOF |
+| **Resource Scaling** | Manual | 🧪 Auto-scaling (experimental) | ✅ Dynamic (see caveats) |
+| **PM Failover** | ❌ None | 🧪 Doctor-managed | No SPOF (diagnosis works; restart relies on Doctor fix execution 🧪) |
 | **Worker Health** | ❌ None | ✅ Health monitor + auto restart | ✅ Self-healing |
 | **Worker Checkpoint** | ❌ None | ✅ Doctor-first + checkpoint restore | ✅ No work loss |
-| **Timeout/Escalation** | Manual | ✅ Auto timeout → escalate | ✅ Automated |
-| **Bug Resolution** | User self-reports to GitHub | ✅ Doctor agent → fix or issue | ✅ Autonomous |
+| **Timeout/Escalation** | Manual | 🧪 Auto timeout → escalate (partial) | Partially shipped |
+| **Bug Resolution** | User self-reports to GitHub | 🧪 Doctor agent → diagnose (fix execution roadmap) | Diagnosis works; automated fix 🗺️ |
 | **Communication** | Peer-to-peer (Matrix) | ✅ Bidirectional via Orchestrator | ✅ No deadlocks |
 | **Documentation** | Generic roles | ✅ Domain-specific JDs | ✅ Accurate skills |
 
-Current snapshot: Matrix HITL, worker health, priority routing, role loading, BMAD workflow integration, and PM failover (Doctor-managed) are shipped; timeout escalation, and retro reports remain roadmap items.
+Legend: ✅ Shipped · 🧪 Experimental · 🗺️ Roadmap
+
+Current snapshot: Matrix HITL, worker health, priority routing, role loading, and BMAD workflow integration are **shipped** (✅). Doctor diagnostics, auto-scaling, PM failover, and timeout/escalation are **experimental** (🧪) — see the notes in the sections above. Full PO→PM→HR→Workers delegation at ticket intake, Doctor automated fix execution, and retro reports remain **roadmap** items (🗺️).
 
 ---
 
@@ -275,7 +280,7 @@ ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
 |---------|------|---------|
 | **Plane** | 9000 | Ticket management & webhooks |
 | **BookStack** | 6875 | Documentation & secrets storage |
-| **Matrix (Synapse)** | 8008/8448 | Bidirectional admin ↔ worker communication |
+| **Matrix (Synapse)** | 8008 (localhost) | Bidirectional admin ↔ worker communication |
 | **Element Web** | 8080 | Web chat interface for Matrix |
 | **Orchestrator** | 3001 | Event-driven API gateway & Matrix relay |
 | **Workers** | Ephemeral | Docker containers, auto-remove |
@@ -332,20 +337,6 @@ ARGUMENTS: {"skill_names": "bmad-dev,python,fastapi"}
 
 ## 🚀 Quick Start
 
-### Guided Local Installer
-
-**macOS / Linux:**
-```bash
-bash install/install.sh
-```
-
-**Windows (PowerShell):**
-```powershell
-.\install\install.ps1
-```
-
-### Manual Installation
-
 ```bash
 # 1. Clone repository
 git clone https://github.com/louisphamdev/turing-os.git
@@ -357,26 +348,15 @@ cp .env.example .env
 # 3. Configure LLM provider in .env
 #    For ollama, you can leave LLM_API_KEY blank and point LLM_BASE_URL to localhost.
 
-# 4. Build images
-docker build -t turing-worker-base:latest ./base-worker
-docker compose build turing-orchestrator
+# 4. Build images and start services
+make build
+make up
 
-# 5. Start services
-docker compose up -d
+# 5. Bootstrap Matrix admin/bot accounts + tokens
+make bootstrap
+# (equivalent to running ./init-admin-users.sh, or .\init-admin-users.ps1 on Windows)
 
-# 6. Bootstrap Plane + Matrix accounts
-./init-admin-users.sh
-
-# Windows PowerShell
-.\init-admin-users.ps1
-
-# 7. Verify service connections
-bash install/config.sh test
-
-# Windows PowerShell
-.\install\config.ps1 -Service test
-
-# 8. Verify orchestrator health
+# 6. Verify orchestrator health
 curl http://localhost:3001/health
 ```
 
@@ -396,7 +376,6 @@ curl http://localhost:3001/health
 
 ```
 turing-os/
-├── install/                 # Installers (sh + ps1)
 ├── orchestrator/           # Node.js API gateway & Matrix relay
 │   └── src/
 │       ├── api/webhooks.ts  # Plane, Matrix & worker-inbox endpoints
@@ -419,9 +398,8 @@ turing-os/
 │   └── doctor-fixes/      # Self-healing PowerShell scripts (Doctor)
 ├── synapse/                # Matrix Synapse config
 ├── element_config/         # Element Web config
-├── taiga-gateway/          # Plane nginx config
 ├── .github/                # Issue templates
-├── helm/                   # Kubernetes deployment
+├── helm/                   # Kubernetes deployment (🗺️ roadmap stub — Chart.yaml + README only)
 └── docs/                   # Architecture docs
 ```
 
@@ -429,36 +407,22 @@ turing-os/
 
 ## 🔧 Configuration
 
-Tokens are managed separately via config manager:
+All configuration lives in `.env` (copy from `.env.example`). Matrix admin/bot
+tokens are generated automatically by `init-admin-users.sh` (run via
+`make bootstrap`); the Plane API token is obtained from the Plane onboarding UI
+and pasted into `PLANE_API_TOKEN`. See `.env.example` for the full list of
+variables.
 
-```powershell
-# Windows
-.\install\config.ps1                    # Configure all
-.\install\config.ps1 -Service taiga     # Plane only
-.\install\config.ps1 -Service test      # Test connections
+To verify the stack is healthy:
 
-# macOS/Linux
-./install/config.sh                     # Configure all
-./install/config.sh taiga               # Plane only
-./install/config.sh test                # Test connections
-```
-
-Services status:
-```
-╔══════════════════════════════════════╗
-║     TURING OS SERVICE STATUS          ║
-╠══════════════════════════════════════╣
-║  Plane:      ✓ Connected             ║
-║  Matrix:     ✓ Connected (sync)      ║
-║  Element:    ✓ Connected             ║
-║  BookStack:    ✓ Connected             ║
-║  Context7:   ✓ Connected             ║
-╚══════════════════════════════════════╝
+```bash
+curl http://localhost:3001/health
+docker compose logs -f turing-orchestrator
 ```
 
 ---
 
-## 💬 Admin Commands (via Matrix/Element)
+## 💬 Admin Commands
 
 | Command | Description |
 |---------|-------------|
@@ -466,16 +430,18 @@ Services status:
 | `/timeout-status` | Show workers currently waiting for admin replies |
 | `/unblock <ticket_id>` | Restart a blocked worker |
 | `/kill <ticket_id>` | Terminate a worker |
-| `/help` | Show available commands |
-| _(plain message)_ | Send message to worker in that room |
+| `/help` | Show the list of available admin commands |
+| _(plain message in a worker room)_ | Send message to worker in that room |
+
+> ✅ The commands above (plus `/help`) work as slash-commands typed directly in Element chat — the in-chat command handler dispatches them through the orchestrator and posts the result back into the room. They are **admin-authorized**: only the configured `MATRIX_ADMIN_USER_ID` may run them; other senders are rejected. The same `handleAdminCommand` logic also backs the authenticated HTTP admin-command endpoint, so the two surfaces never drift.
 
 ## ✅ First-Run Checklist
 
-1. Run `docker compose up -d` from the repository root.
-2. Bootstrap service users with `./init-admin-users.sh` on macOS/Linux or `.\init-admin-users.ps1` on Windows.
-3. Verify tokens and service connections with `bash install/config.sh test` or `.\install\config.ps1 -Service test`.
+1. Build and start the stack with `make build && make up` (or `docker compose up -d`) from the repository root.
+2. Bootstrap service users with `make bootstrap` (`./init-admin-users.sh` on macOS/Linux, `.\init-admin-users.ps1` on Windows).
+3. Verify the orchestrator is healthy with `curl http://localhost:3001/health`.
 4. Open Element at http://localhost:8080 and sign in with the admin account you configured.
-5. Create a Plane ticket in `TODO` state, then use `/status` in Element to confirm the orchestrator sees active workers.
+5. Create a Plane ticket in `TODO` state to confirm the orchestrator spawns a worker (watch `docker compose logs -f turing-orchestrator`).
 
 ---
 
@@ -485,9 +451,11 @@ Services status:
 |---------|-------|--------|
 | v1.0 | Core: Plane + Workers + PM + HR | ✅ Shipped |
 | v1.1 | Matrix bidirectional HITL + Worker Health + Flapping Detection | ✅ Shipped |
-| v1.2 | Security Gateway Proxy + RBAC + Auto-scaling + Doctor Agent | ✅ Shipped |
-| v1.3 | Doctor Dynamic Tools + Config Patching + Cross-Worker Invocation | ✅ Shipped |
-| v2.0 | PM failover (Doctor) + Timeout/Escalation hardening + Retro reports | In Progress |
+| v1.2 | Security Gateway Proxy + RBAC | ✅ Shipped; Auto-scaling 🧪 experimental; Doctor diagnostics 🧪 (fix execution 🗺️) |
+| v1.3 | Doctor Dynamic Tools + Config Patching + Cross-Worker Invocation | 🧪 Tools registered; fix/patch execution not functional in the Linux image (🗺️ roadmap) |
+| v2.0 | PM failover (Doctor) + Timeout/Escalation hardening + Retro reports | In Progress (🧪/🗺️) |
+
+Legend: ✅ Shipped · 🧪 Experimental · 🗺️ Roadmap
 
 ---
 

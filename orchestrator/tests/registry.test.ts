@@ -143,4 +143,21 @@ describe('WorkerRegistry', () => {
     expect(registry.lookupByTicket('T1')).toBeDefined();
     expect(registry.lookupByTicket('T2')).toBeUndefined();
   });
+
+  it('should reconcile with Docker — keep STOPPED workers even without a live container', async () => {
+    // Ephemeral model: a STOPPED worker legitimately has no container
+    // (auto-removed on stop). It must NOT be pruned — startWorker() recreates it.
+    registry.register('STOPPED-1', 'STOPPED', 'se', '!room:abc');
+    registry.update('STOPPED-1', { containerId: 'old-container-gone' });
+
+    // No containers are running in Docker at all.
+    await registry.reconcileWithDocker([]);
+
+    const worker = registry.lookupByTicket('STOPPED-1');
+    expect(worker).toBeDefined();
+    expect(worker!.status).toBe('STOPPED');
+    // role/roomId preserved so startWorker() can recreate from them
+    expect(worker!.role).toBe('se');
+    expect(worker!.roomId).toBe('!room:abc');
+  });
 });

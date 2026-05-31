@@ -1,0 +1,28 @@
+# Ruff configuration for the Turing OS base worker.
+#
+# This is a CONSERVATIVE gate intended to catch real regressions (syntax
+# errors, undefined names, unused imports/variables) without forcing a
+# large stylistic cleanup of the existing tree. It replaces the old
+# hand-listed `py_compile` step in CI — `ruff check .` parses every module
+# and so also catches syntax errors across the whole tree.
+#
+# To tighten later: drop entries from `ignore` (start with E501) and/or
+# widen `select` (e.g. add `I` for import sorting, `B` for bugbear, `UP`
+# for pyupgrade) once the corresponding violations are cleaned up.
+
+target-version = "py312"
+line-length = 100
+
+[lint]
+# E = pycodestyle errors, F = pyflakes. Conservative, high-signal set.
+select = ["E", "F"]
+
+ignore = [
+    # line-too-long. 200+ pre-existing occurrences across the tree; purely
+    # stylistic and not worth a mass reflow right now. Deferred — re-enable
+    # after a formatting pass (or run `ruff format`).
+    "E501",
+]
+
+# Cache / build artefacts are excluded by Ruff's defaults (.ruff_cache,
+# __pycache__, .pytest_cache, etc.); no extra excludes needed.

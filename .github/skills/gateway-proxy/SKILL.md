@@ -10,11 +10,11 @@ user-invocable: true
 
 This skill covers the gateway proxy and credential vault:
 - Understanding secure API access patterns
-- Vault and secret management
+- Vault and secret management (env-imported credentials)
 - Consumer token system
-- BookStack integration for secrets
+- Service proxies (LLM / Plane / BookStack / Matrix)
 - Troubleshooting authentication errors
-- Adding new protected endpoints
+- Adding new protected services
 
 ## Architecture
 
@@ -37,9 +37,13 @@ This skill covers the gateway proxy and credential vault:
 │        │                  │                  │                 │
 │        ▼                  ▼                  ▼                 │
 │  ┌────────────┐     ┌────────────┐     ┌────────────┐        │
-│  │  BookStack   │     │   Token    │     │    Role     │        │
-│  │  (secrets) │     │   Store    │     │ Permissions │        │
+│  │  Env-       │     │   Token    │     │    Role     │        │
+│  │  imported  │     │   Store    │     │ Permissions │        │
+│  │  secrets   │     │            │     │             │        │
 │  └────────────┘     └────────────┘     └────────────┘        │
+│        │                                                       │
+│        ▼  proxies                                              │
+│   LLM · Plane · BookStack · Matrix                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -56,11 +60,12 @@ interface ConsumerToken {
   expiresAt: Date;
 }
 
-// Generate short-lived token for worker
+// Generate short-lived token for worker. Permissions follow the
+// <service>:<action> scheme from rbac.ts (llm/plane/bookstack/matrix/github).
 const token = consumerTokenManager.generateToken({
   workerId: 'se-001',
   role: 'software-engineer',
-  permissions: ['tickets:read', 'tools:execute', 'matrix:send'],
+  permissions: ['llm:*', 'plane:read', 'plane:write', 'bookstack:read'],
   expiresIn: '1h',
 });
 ```
@@ -70,72 +75,62 @@ const token = consumerTokenManager.generateToken({
 ```typescript
 // orchestrator/src/core/credential-vault.ts
 
-// Workers NEVER have direct API keys
-// They request through vault:
+// Workers NEVER hold API keys. The vault stores credentials encrypted
+// (AES-256), imported from environment variables on startup via
+// importFromEnvironment() (OPENAI_API_KEY, PLANE_API_TOKEN, BOOKSTACK_TOKEN,
+// MATRIX_BOT_TOKEN, GITHUB_TOKEN, ...). The proxy fetches the credential and
+// injects it server-side — workers never see the raw key.
 
-async function getSecret(workerId: string, key: string): Promise<string | null> {
-  // 1. Check RBAC - can this worker access this key?
-  const allowed = rbacService.canAccess(workerRole, 'vault', 'read');
-  if (!allowed) {
-    throw new Error('Permission denied');
-  }
-
-  // 2. Fetch from BookStack
-  const doc = await wikijs.get('/api/secrets', { key });
-
-  // 3. Return value (not the key)
-  return doc.value;
-}
+const vault = getCredentialVault();
+const cred = await vault.getCredentialByType('plane'); // { key, authHeader, ... }
 ```
 
-### Proxy Handlers
+### Service Proxies
 
 ```typescript
 // orchestrator/src/core/gateway/proxy-handler.ts
-const handlers = {
-  '/vault/': handleVaultRequest,      // Secret access
-  '/taiga/': handleTaigaRequest,        // Taiga API proxy
-  '/context7/': handleContext7Request,  // Research API proxy
-};
+// Path scheme: /gateway/<service>/<endpoint>. The handler dispatches by service:
+//   /gateway/llm/...       → LLMProxy
+//   /gateway/plane/...     → PlaneProxy
+//   /gateway/bookstack/... → BookStackProxy
+//   /gateway/matrix/...    → MatrixProxy
+//   /gateway/health        → liveness check
 ```
 
 ## Request Flow
 
-### Worker Request: Get Secret
+### Worker Request: LLM Completion
 
 ```
-1. Worker → GET /vault/openai.api_key
+1. Worker → POST /gateway/llm/chat/completions
    Headers: { Authorization: "Bearer <consumer_token>" }
 
 2. Gateway validates token
-   - Token valid? Not expired?
-   - Token belongs to worker?
+   - Token valid? Not expired? Rate limit OK?
 
 3. Gateway checks RBAC
-   - Can 'se' role access '/vault/*'?
+   - canAccessService('software-engineer', 'llm')?
 
-4. Gateway fetches from BookStack
-   - GET /api/query?key=openai.api_key
+4. Gateway injects the vault LLM credential and forwards upstream
+   - Worker never sees the raw API key
 
-5. Gateway returns secret value
-   - Response: { value: "sk-..." }
+5. Gateway returns the upstream response
 ```
 
-### Worker Request: Create Taiga Ticket
+### Worker Request: Create Plane Ticket
 
 ```
-1. Worker → POST /taiga/userstories
+1. Worker → POST /gateway/plane/issues
    Headers: { Authorization: "Bearer <consumer_token>" }
-   Body: { subject: "...", project: 1 }
+   Body: { name: "...", project: "<id>" }
 
 2. Gateway validates token + RBAC
-   - Can 'se' role create tickets?
+   - canAccessService(role, 'plane') AND canPerformAction(role, 'plane', 'write')
 
-3. Gateway forwards to Taiga
-   - Adds system auth headers
-   - Strips worker credentials
+3. Gateway forwards to Plane
+   - Injects the vault Plane token, strips worker credentials
 
-4. Gateway returns Taiga response
+4. Gateway returns the Plane response
 ```
 
 ## Consumer Token Format
@@ -144,7 +139,7 @@ const handlers = {
 interface JWTPayload {
   sub: string;      // worker ID
   role: string;     // software-engineer
-  perms: string[];  // ['tickets:read', 'tools:execute']
+  perms: string[];  // ['llm:*', 'plane:read', 'plane:write', 'bookstack:read']
   iat: number;      // issued at
   exp: number;       // expires at
 }
@@ -175,64 +170,50 @@ try {
 
 ### 403 Forbidden
 ```typescript
-// Valid token but no permission
-const allowed = rbacService.canAccess(role, resource, action);
-if (!allowed) {
-  return {
-    status: 403,
-    body: { error: `Role '${role}' cannot '${action}' on '${resource}'` }
-  };
+// Valid token but no permission for this service/action
+const rbac = getRBACService();
+if (!rbac.canAccessService(role, service)) {
+  return { status: 403, body: { error: `Access denied for service: ${service}` } };
+}
+if (service !== 'llm' && !rbac.canPerformAction(role, service, methodToAction(method))) {
+  return { status: 403, body: { error: `Role '${role}' lacks ${service} permission` } };
 }
 ```
 
-### Vault Key Not Found
+### Missing Credential
 ```typescript
-// Secret doesn't exist in BookStack
-const doc = await wikijs.get('/api/secrets', { key });
-if (!doc) {
-  return { status: 404, body: { error: 'Secret not found' } };
+// The vault has no credential for this service (env var not set on startup)
+const cred = await vault.getCredentialByType(service);
+if (!cred) {
+  return { status: 500, body: { error: `No ${service} credential configured` } };
 }
 ```
 
-## BookStack Secret Structure
+## Vault Credential Source
 
-```javascript
-// BookStack collection: 'secrets'
-{
-  key: "openai.api_key",           // Unique identifier
-  value: "sk-...",                 // The actual secret
-  tags: ["production", "llm"],     // For filtering
-  allowedRoles: ["se", "qa"],      // Who can access
-  createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z"
-}
-```
+Credentials are stored encrypted in the vault and imported from environment
+variables at startup (`credential-vault.ts` `importFromEnvironment`):
 
-## Adding New Vault Key
+| Env var | Vault type / provider |
+|---------|-----------------------|
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `MINIMAX_API_KEY` / `GOOGLE_API_KEY` | `llm` |
+| `PLANE_API_TOKEN` | `plane` |
+| `BOOKSTACK_TOKEN` | `bookstack` |
+| `MATRIX_BOT_TOKEN` | `matrix` |
+| `GITHUB_TOKEN` | `github` |
 
-1. Store in BookStack:
-   ```
-   POST /api/query
-   {
-     "collection": "secrets",
-     "document": {
-       "key": "my-new-api-key",
-       "value": "secret-value",
-       "tags": ["development"],
-       "allowedRoles": ["se"]
-     }
-   }
-   ```
+## Adding a New Credential / Service Permission
 
-2. Update RBAC if needed:
+1. Add the env var to `.env` / `.env.example` and the `envMappings` list in
+   `importFromEnvironment()` (`credential-vault.ts`).
+
+2. Grant the service to roles in `rbac.ts`:
    ```typescript
-   // In rbac.ts
-   const ROLE_PERMISSIONS = {
-     'se': [
-       // ... existing ...
-       { resource: 'vault', actions: ['read'], keys: ['my-new-api-key'] },
-     ],
-   };
+   // In ROLE_PERMISSIONS
+   'software-engineer': [
+     // ... existing ...
+     'github:read', 'github:write',
+   ],
    ```
 
 ## Related Files

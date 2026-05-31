@@ -89,6 +89,7 @@ export const config = {
     scaleUpThreshold: optionalInt('SCALE_UP_THRESHOLD', 80),    // % CPU or RAM
     scaleDownThreshold: optionalInt('SCALE_DOWN_THRESHOLD', 20), // % CPU or RAM
     idleTimeoutMinutes: optionalInt('IDLE_TIMEOUT_MINUTES', 5), // minutes idle before scale-down
+    minWorkers: optionalInt('MIN_WORKERS', 1), // never scale below this many RUNNING workers
   },
 
   github: {
@@ -119,7 +120,7 @@ export function logConfigSummary(): void {
   console.log(`[Config] Matrix: ${config.matrix.apiUrl} (token: ${config.matrix.botToken ? '✓' : '✗'})`);
   console.log(`[Config] BookStack: ${config.bookstack.url} (token: ${config.bookstack.apiToken ? '✓' : '✗'})`);
   console.log(`[Config] Context7: ${config.context7.apiKey ? '✓ Set' : '✗ Missing'}`);
-  console.log(`[Config] Docker: ${config.docker.workerImage} (max: ${config.docker.maxWorkers})`);
+  console.log(`[Config] Docker: ${config.docker.workerImage} (max: ${config.docker.maxWorkers}, min: ${config.worker.minWorkers})`);
   console.log(`[Config] Execution Mode: ${config.worker.executionMode}`);
   console.log('[Config] ═══════════════════════════════════════');
 }

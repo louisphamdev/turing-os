@@ -27,6 +27,14 @@ jobs:
         working-directory: orchestrator
         run: npx tsc --noEmit
 
+      # ESLint quality gate. Config: orchestrator/eslint.config.js.
+      # Errors fail the build; several pre-existing rules are intentionally
+      # demoted to warnings (see the config header) so the gate is green on
+      # the current tree while still catching new errors.
+      - name: Lint
+        working-directory: orchestrator
+        run: npm run lint
+
       - name: Test
         working-directory: orchestrator
         run: npm test -- --ci
@@ -47,13 +55,14 @@ jobs:
         working-directory: base-worker
         run: pip install -r requirements.txt
 
-      - name: Syntax check
+      # Ruff replaces the old hand-listed `py_compile` syntax check: it parses
+      # every module under base-worker (catching syntax errors too) and runs a
+      # conservative E,F ruleset. Config: base-worker/ruff.toml (E501 deferred).
+      - name: Lint (ruff)
         working-directory: base-worker
         run: |
-          python -m py_compile src/index.py
-          python -m py_compile src/tools/state_backend.py
-          python -m py_compile src/tools/nats_client.py
-          python -m py_compile src/tools/pm_monitor.py
+          pip install ruff
+          ruff check .
 
       - name: Test
         working-directory: base-worker
@@ -72,3 +81,79 @@ jobs:
 
       - name: Validate default stack
         run: docker compose -f docker-compose.yml config > /dev/null
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Only need the working tree; we scan files, not history (below).
+          fetch-depth: 1
+
+      # We install the gitleaks CLI directly instead of gitleaks/gitleaks-action
+      # because that action requires a (free) license key for organization repos
+      # and doesn't cleanly expose no-git mode. The CLI is unlicensed and stable.
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION=8.21.2
+          curl -sSL -o /tmp/gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      # NO-GIT / filesystem mode on purpose: scans the CURRENT working tree,
+      # NOT git history. The history still contains old secrets that were
+      # placeholdered in the tree but not purged — see CONTRIBUTING.md
+      # ("Secret hygiene & git history"). A default history scan would fail.
+      # Allowlist (node_modules, lockfile, .env.example, jest fixtures,
+      # placeholder strings): .gitleaks.toml.
+      - name: Run gitleaks (no-git, working tree)
+        run: |
+          gitleaks detect \
+            --no-git \
+            --source . \
+            --config .gitleaks.toml \
+            --redact \
+            --no-banner \
+            --exit-code 1
+
+  security-scan:
+    name: Dependency / vuln scan (Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Filesystem scan of the repo (deps, IaC, Dockerfiles). Reports only for
+      # now: exit-code '0' means it NEVER fails the build. Tighten later by
+      # setting exit-code: '1' once the surfaced CRITICAL/HIGH issues are
+      # triaged / fixed.
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '0' # report-only; change to '1' to enforce later
+          format: 'table'
+
+  link-check:
+    name: Docs link-check (lychee)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Checks the primary docs for dead RELATIVE links (e.g. ./CONTRIBUTING.md,
+      # docs/...). External/private URLs (badges, the repo's own github.com
+      # pages) are excluded via .lychee.toml so the gate stays green.
+      - name: Link Checker
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --config .lychee.toml
+            --no-progress
+            README.md CONTRIBUTING.md QUICKSTART.md
+          # Don't open an issue on failure; just fail the step.
+          fail: true

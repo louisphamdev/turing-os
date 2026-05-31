@@ -31,6 +31,8 @@ export class WorkerRegistry {
     this.persistTimer = setInterval(() => {
       this._saveToRedis().catch(() => this._saveToDisk());
     }, 30000);
+    // Don't keep the event loop / test runner alive for this background timer.
+    this.persistTimer.unref?.();
   }
 
   register(ticketId: string, status: ActiveWorker['status'], role: string = 'default', roomId: string = ''): void {
@@ -133,8 +135,15 @@ export class WorkerRegistry {
 
   /**
    * Clean up workers that are no longer running as containers.
-   * STOPPED workers are preserved — they have a valid container that is just paused.
-   * Only RUNNING workers whose container has disappeared are removed.
+   *
+   * Workers are ephemeral (HostConfig.AutoRemove=true): a STOPPED worker has
+   * NO container by design — Docker reaped it on stop, and startWorker() will
+   * recreate a fresh one (state restored from checkpoint + the persistent
+   * `worker_workspace` volume). So a STOPPED worker is a legitimate, valid
+   * entry and must NOT be pruned as a phantom.
+   *
+   * Only RUNNING workers whose container has disappeared are reconciled (they
+   * died unexpectedly), and only when we actually know their containerId.
    */
   async reconcileWithDocker(runningContainerIds: string[]): Promise<void> {
     const runningSet = new Set(runningContainerIds);
@@ -147,7 +156,8 @@ export class WorkerRegistry {
         console.warn(`[Registry] Container for ticket ${ticketId} no longer running, removing`);
         this.registry.delete(ticketId);
       }
-      // STOPPED workers are intentionally NOT removed — their container still exists (just paused)
+      // STOPPED workers are intentionally kept — they have no container under
+      // the ephemeral model, and startWorker() recreates them on demand.
     }
     await this._saveToRedis().catch(() => this._saveToDisk());
   }
@@ -201,5 +211,19 @@ export class WorkerRegistry {
       this.persistTimer = null;
     }
     this._saveToDisk();
+    // Close the Redis client we own so it doesn't leak an open handle.
+    // Guarded: in unit tests the client is a partial mock without quit().
+    try {
+      const quitResult = this.redisClient.quit?.();
+      if (quitResult && typeof (quitResult as Promise<unknown>).catch === 'function') {
+        (quitResult as Promise<unknown>).catch(() => this.redisClient.disconnect?.());
+      }
+    } catch {
+      try {
+        this.redisClient.disconnect?.();
+      } catch {
+        // ignore — process is shutting down
+      }
+    }
   }
 }

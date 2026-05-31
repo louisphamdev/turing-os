@@ -10,12 +10,66 @@
 
 import { config } from '../config';
 import { WorkerRegistry } from './registry';
-import { DockerService } from './docker';
+import { ActiveWorker, DockerService } from './docker';
 import { matrixService } from './matrix';
 import { alertManager } from './alert-manager';
 import { PMStateManager } from './pm-state';
 
 export type HealthStatus = 'healthy' | 'warning' | 'stuck' | 'dead';
+
+/**
+ * Choose which worker to terminate on scale-down.
+ *
+ * Selection rules (P2-8):
+ *   1. Only RUNNING workers are candidates.
+ *   2. A worker is a candidate ONLY if it is actually IDLE — i.e. it has made
+ *      no progress AND received no heartbeat within `idleMs`. A worker that is
+ *      actively making progress (recent `lastProgress`) is NEVER selected, even
+ *      if its heartbeat is briefly stale.
+ *   3. Among idle candidates we pick the MOST idle: the largest "idle age",
+ *      measured as time since `lastProgress`, falling back to `lastHeartbeat`
+ *      when they differ (we use the more recent of the two as the activity
+ *      signal, so a worker that recently heartbeat but hasn't reported progress
+ *      is treated as more-active than one silent on both).
+ *   4. We never scale below `minWorkers` RUNNING workers — if doing so would
+ *      drop the running count to/below the floor, no victim is returned.
+ *
+ * Returns the victim worker, or `null` when there is nothing safe to stop.
+ */
+export function selectScaleDownVictim(
+  workers: ActiveWorker[],
+  now: number,
+  idleMs: number,
+  minWorkers: number,
+): ActiveWorker | null {
+  const running = workers.filter((w) => w.status === 'RUNNING');
+
+  // Honor the floor: stopping a worker must not drop us to/below minWorkers.
+  if (running.length <= minWorkers) {
+    return null;
+  }
+
+  // "Idle age" = time since the worker last showed ANY sign of activity.
+  // We treat the most-recent of lastProgress / lastHeartbeat as that signal so
+  // an actively-progressing (or recently-heartbeating) worker is never idle.
+  const idleAge = (w: ActiveWorker): number =>
+    now - Math.max(w.lastProgress, w.lastHeartbeat);
+
+  const idleCandidates = running.filter((w) => idleAge(w) > idleMs);
+  if (idleCandidates.length === 0) {
+    return null;
+  }
+
+  // Most idle first (largest idle age). Stable tie-break on ticketId so the
+  // choice is deterministic.
+  idleCandidates.sort((a, b) => {
+    const diff = idleAge(b) - idleAge(a);
+    if (diff !== 0) return diff;
+    return a.ticketId.localeCompare(b.ticketId);
+  });
+
+  return idleCandidates[0];
+}
 
 export interface WorkerHealthInfo {
   ticketId: string;
@@ -49,6 +103,7 @@ export class HealthMonitor {
   private readonly scaleUpThreshold = config.worker.scaleUpThreshold;      // 80%
   private readonly scaleDownThreshold = config.worker.scaleDownThreshold;  // 20%
   private readonly idleTimeoutMinutes = config.worker.idleTimeoutMinutes;   // 5 min
+  private readonly minWorkers = config.worker.minWorkers;                   // never scale below this
 
   private checkTimer: ReturnType<typeof setInterval> | null = null;
   private resourceCheckTimer: ReturnType<typeof setInterval> | null = null;
@@ -83,12 +138,14 @@ export class HealthMonitor {
         console.error('[HealthMonitor] Check failed:', err)
       );
     }, 60000);
+    this.checkTimer.unref?.();
 
     this.resourceCheckTimer = setInterval(() => {
       this.checkResources().catch((err) =>
         console.error('[HealthMonitor] Resource check failed:', err)
       );
     }, this.resourceCheckInterval);
+    this.resourceCheckTimer.unref?.();
 
     console.log(`[HealthMonitor] Started (health every 60s, resources every ${this.resourceCheckInterval / 1000}s)`);
   }
@@ -457,18 +514,22 @@ export class HealthMonitor {
       return;
     }
 
-    // Scale DOWN — only if idle (no active tasks) and below threshold
-    if (avgUsage < this.scaleDownThreshold && runningCount > 1) {
-      // Check if workers are idle (no recent heartbeats/progress means no active tasks)
-      const workers = this.registry.listActive();
-      const idleWorkers = workers.filter((w) => {
-        const idleMinutes = (now - w.lastProgress) / 60_000;
-        return idleMinutes > this.idleTimeoutMinutes && w.status === 'RUNNING';
-      });
+    // Scale DOWN — only if there is an actually-idle worker we can safely stop
+    // without dropping below minWorkers, and we're below the usage threshold.
+    if (avgUsage < this.scaleDownThreshold && runningCount > this.minWorkers) {
+      // Pick the most-idle RUNNING worker (never one actively making progress).
+      // selectScaleDownVictim also enforces the minWorkers floor.
+      const idleMs = this.idleTimeoutMinutes * 60_000;
+      const victim = selectScaleDownVictim(this.registry.listActive(), now, idleMs, this.minWorkers);
 
-      if (idleWorkers.length > 0) {
-        console.warn(`[HealthMonitor] Scale DOWN triggered: avg usage ${avgUsage.toFixed(1)}% < threshold ${this.scaleDownThreshold}%, ${idleWorkers.length} idle workers`);
-        this.onScaleNeeded?.('down', { avgCpuPercent, avgMemoryPercent, runningCount, idleWorkerCount: idleWorkers.length });
+      if (victim) {
+        console.warn(`[HealthMonitor] Scale DOWN triggered: avg usage ${avgUsage.toFixed(1)}% < threshold ${this.scaleDownThreshold}%, most-idle worker ${victim.ticketId}`);
+        this.onScaleNeeded?.('down', {
+          avgCpuPercent,
+          avgMemoryPercent,
+          runningCount,
+          idleTicketId: victim.ticketId,
+        });
         this.lastScaleAction = now;
       }
     }
@@ -509,6 +570,7 @@ export class HealthMonitor {
     avgCpuPercent: number;
     avgMemoryPercent: number;
     runningCount: number;
-    idleWorkerCount?: number;
+    /** On scale-down: the ticketId of the most-idle worker chosen to stop. */
+    idleTicketId?: string;
   }) => void;
 }

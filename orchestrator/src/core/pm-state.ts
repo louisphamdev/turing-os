@@ -42,6 +42,7 @@ export class PMStateManager {
     this.persistTimer = setInterval(() => {
       this.saveState().catch(err => console.warn(`[PMState] auto-persist failed: ${err}`));
     }, 30000);
+    this.persistTimer.unref?.();
     console.log('[PMState] Auto-persist started (30s interval)');
   }
 

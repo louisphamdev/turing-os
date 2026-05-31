@@ -39,12 +39,6 @@ docker compose up -d
 ```bash
 docker ps
 curl http://localhost:3001/health
-
-# macOS/Linux
-bash install/config.sh test
-
-# Windows PowerShell
-.\install\config.ps1 -Service test
 ```
 
 ---
@@ -89,37 +83,19 @@ Each worker gets a dedicated Matrix room (e.g. "Turing - PM", "Turing - PO"). Yo
 - **Use commands** like `/status`, `/timeout-status`, `/unblock <ticket_id>`, `/kill <ticket_id>`
 - **Receive notifications** when workers are blocked or complete tasks
 
+> 🧪 **Experimental**: Admin slash-commands currently work via an authenticated HTTP POST to the orchestrator, not by typing them into Element chat (in-chat command handling is not yet wired — 🗺️ roadmap). `/help` is not implemented.
+
 ## First Successful Run
 
 1. Open Plane at http://localhost:9000 and create a `TODO` ticket with priority `P1`.
-2. Open Element at http://localhost:8080 and sign in with the same admin account configured during install.
-3. Run `/status` to confirm workers are online.
-4. Watch `docker compose logs -f turing-orchestrator` or the worker room in Element to confirm the ticket is picked up.
+2. Open Element at http://localhost:8080 and sign in with the admin account configured by `init-admin-users`.
+3. Watch `docker compose logs -f turing-orchestrator` or the worker room in Element to confirm the ticket is picked up.
 
 ---
 
-## Interactive Installer
+## Configuration
 
-For a guided setup with all config prompts:
-
-```bash
-# macOS/Linux
-bash install/install.sh
-
-# Windows (PowerShell)
-.\install\install.ps1
-```
-
-## Post-Install Config
-
-Reconfigure individual services:
-
-```bash
-# macOS/Linux
-bash install/config.sh taiga     # Configure Plane only
-bash install/config.sh test      # Test all connections
-
-# Windows (PowerShell)
-.\install\config.ps1 -Service taiga
-.\install\config.ps1 -Service test
-```
+All configuration lives in `.env` (copied from `.env.example`). Matrix
+admin/bot tokens are generated automatically by `init-admin-users.sh` (run via
+`make bootstrap`). The Plane API token comes from the Plane onboarding UI —
+paste it into `PLANE_API_TOKEN` and run `make restart`.

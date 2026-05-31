@@ -52,25 +52,34 @@ Execute request
 | `data` | 4 | Data analyst |
 | `security` | 4 | Security engineer |
 
-### Resources and Actions
+### Services and Permissions
+
+Permissions are `<service>:<action>` strings, where service ∈
+`llm | plane | bookstack | matrix | github` and action ∈ `read | write | *`
+(plus the global `*`). `ROLE_PERMISSIONS` maps each role to a flat list.
 
 ```typescript
 // orchestrator/src/core/rbac.ts
-interface Permission {
-  resource: string;  // 'tickets', 'workers', 'vault', 'matrix'
-  action: string;     // 'create', 'read', 'update', 'delete', 'execute'
-}
+type Permission =
+  | 'llm:read' | 'llm:write' | 'llm:*'
+  | 'plane:read' | 'plane:write' | 'plane:create-task' | 'plane:*'
+  | 'bookstack:read' | 'bookstack:write' | 'bookstack:*'
+  | 'matrix:read' | 'matrix:write' | 'matrix:*'
+  | 'github:read' | 'github:write' | 'github:repo' | 'github:*'
+  | '*';
 
-const ROLE_PERMISSIONS = {
+const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   'pm': [
-    { resource: 'tickets', actions: ['create', 'read', 'update', 'delete'] },
-    { resource: 'workers', actions: ['read', 'assign'] },
-    { resource: 'queue', actions: ['enqueue', 'dequeue', 'interrupt'] },
+    'llm:read',
+    'plane:*',
+    'bookstack:read', 'bookstack:write',
+    'matrix:read', 'matrix:write',
   ],
   'software-engineer': [
-    { resource: 'tickets', actions: ['read', 'update'] }, // Own tickets only
-    { resource: 'tools', actions: ['execute'] },
-    { resource: 'matrix', actions: ['send'] },
+    'llm:*',
+    'plane:read', 'plane:write', 'plane:create-task',
+    'bookstack:read', 'bookstack:write',
+    'github:read', 'github:write', 'github:repo',
   ],
   // ...
 };
@@ -81,18 +90,18 @@ const ROLE_PERMISSIONS = {
 ### In Gateway Proxy
 ```typescript
 // orchestrator/src/core/gateway/proxy-handler.ts
-import { getRBACService } from '../rbac';
+import { getRBACService, methodToAction } from '../rbac';
 
-function handleWorkerRequest(req: Request) {
-  const workerRole = req.headers['x-worker-role'];
-  const resource = req.path;
-  const action = req.method.toLowerCase();
-
-  const allowed = rbacService.canAccess(workerRole, resource, action);
-  if (!allowed) {
-    return { status: 403, body: { error: 'Permission denied' } };
-  }
-  return { status: 200 };
+// Path is /gateway/<service>/<endpoint>; role comes from the validated token.
+const rbac = getRBACService();
+if (!rbac.canAccessService(role, service)) {
+  res.status(403).json({ error: `Access denied for service: ${service}` });
+  return;
+}
+// Non-LLM services also get a method-level action check.
+if (service !== 'llm' && !rbac.canPerformAction(role, service, methodToAction(method))) {
+  res.status(403).json({ error: `Access denied: role '${role}' lacks ${service} permission` });
+  return;
 }
 ```
 
@@ -102,67 +111,57 @@ import { getRBACService } from './core/rbac';
 
 const rbac = getRBACService();
 
-// Check if role can access resource
-const result = rbac.canAccess('se', 'tickets', 'create');
-// result: { allowed: true } or { allowed: false, reason: "SE cannot create tickets" }
+// Check if a role can access a service ('llm'|'plane'|'bookstack'|'matrix'|'github')
+const allowed = rbac.canAccessService('software-engineer', 'plane'); // boolean
 
-// Check if role has any permission on resource
-const perms = rbac.getPermissions('pm');
-// perms: [{ resource: 'tickets', actions: ['create', 'read', ...] }]
+// Check a method-level action
+const canWrite = rbac.canPerformAction('software-engineer', 'plane', 'write'); // boolean
+
+// List a role's permissions
+const perms = rbac.getPermissionsForRole('pm');
+// perms: ['llm:read', 'plane:*', 'bookstack:read', 'bookstack:write', ...]
 ```
 
 ## Adding New Role
 
-### 1. Create Role Definition
+### 1. Add Role to the `Role` Union and `ROLE_PERMISSIONS`
 ```typescript
 // orchestrator/src/core/rbac.ts
 
-const ROLE_PERMISSIONS = {
+export type Role = /* ...existing... */ | 'new-role';
+
+export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   // ... existing roles ...
 
   'new-role': [
-    { resource: 'tickets', actions: ['read'] },
-    { resource: 'workers', actions: ['read'] },
+    'llm:read',
+    'plane:read',
+    'bookstack:read',
   ],
 };
 ```
 
-### 2. Update Role Hierarchy
+### 2. Add Matching Rate Limit and Token Expiry
 ```typescript
-const ROLE_HIERARCHY = {
-  'po': 1,
-  'pm': 2,
-  'hr': 3,
-  'new-role': 4,  // Same level as SE/QA
-};
-```
-
-### 3. Add Worker Type (if needed)
-```typescript
-// In worker spawn config
-const WORKER_ROLES = {
-  'new-role': {
-    image: 'turing-worker:latest',
-    skills: ['new-role-skill'],
-  },
-};
+// Same file: ROLE_RATE_LIMITS and ROLE_TOKEN_EXPIRY are also Record<Role, ...>,
+// so a new role must have entries there too or TypeScript will fail to compile.
+ROLE_RATE_LIMITS['new-role'] = { requests: 30, windowMs: 60000 };
+ROLE_TOKEN_EXPIRY['new-role'] = 24;
 ```
 
 ## Debugging Permission Errors
 
 ### Common Error: "Permission denied"
 ```typescript
-// Check worker role in request
-console.log('Worker role:', req.headers['x-worker-role']);
+const rbac = getRBACService();
 
-// Check actual permissions
-const perms = rbacService.getPermissions('se');
+// Check actual permissions for the role
+const perms = rbac.getPermissionsForRole('software-engineer');
 console.log('SE permissions:', perms);
 
-// Check if resource/action exists
-const can = rbacService.canAccess('se', 'tickets', 'delete');
-console.log('Can SE delete tickets?', can);
-// Expected: false (SE cannot delete tickets)
+// Check service access + method-level action
+console.log('Can SE reach plane?', rbac.canAccessService('software-engineer', 'plane'));
+console.log('Can SE write plane?', rbac.canPerformAction('software-engineer', 'plane', 'write'));
 ```
 
 ### Error Codes
@@ -176,11 +175,11 @@ console.log('Can SE delete tickets?', can);
 ## Gateway Proxy Flow
 
 ```
-1. Worker makes request to /vault/<secret>
-2. Gateway extracts token from header
-3. Gateway validates token with consumer-token service
-4. Gateway checks RBAC: can this role access /vault/*?
-5. If allowed → fetch from BookStack, return value
+1. Worker calls /gateway/<service>/<endpoint> (e.g. /gateway/plane/issues)
+2. Gateway extracts the consumer token from the Authorization header
+3. Gateway validates the token (consumer-token service)
+4. Gateway checks RBAC: canAccessService(role, service) + canPerformAction(...)
+5. If allowed → proxy injects the vault credential and forwards to the service
 6. If denied → 403 Forbidden
 ```
 

@@ -1,6 +1,5 @@
 """Unit tests for the ToolRegistry class."""
 
-import pytest
 from src.tools.tool_registry import ToolRegistry
 
 

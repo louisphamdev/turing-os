@@ -1,9 +1,10 @@
 import express from 'express';
-import { webhooksRouter } from './api/webhooks';
-import { makeRequireAdmin } from './api/middleware';
+import { webhooksRouter, handleAdminCommand } from './api/webhooks';
+import { makeRequireAdmin, makeRequireWorkerToken, requestLogger } from './api/middleware';
+import { logger } from './core/logger';
 import { DockerService } from './core/docker';
 import { WorkerRegistry } from './core/registry';
-import { HealthMonitor } from './core/health-monitor';
+import { HealthMonitor, selectScaleDownVictim } from './core/health-monitor';
 import { alertManager } from './core/alert-manager';
 import { config, logConfigSummary } from './config';
 import { initAgentRoles, getAllAgentRoles } from './agents/init';
@@ -15,8 +16,14 @@ import { getConsumerTokenManager } from './core/consumer-token';
 import { getRBACService } from './core/rbac';
 import { PMStateManager } from './core/pm-state';
 import { natsService } from './core/nats';
+import { peekCredentialRotator } from './core/credential-rotator';
+import { renderMetrics } from './core/metrics';
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────
+// TODO(observability): migrate remaining console.* to logger incrementally.
+// The structured logger (./core/logger) is wired at high-value seams (request
+// logging, startup record, gateway error path). The human-readable banner and
+// lifecycle console.* below are intentionally left as-is for now.
 console.log('');
 console.log('╔══════════════════════════════════════════════╗');
 console.log('║        TURING OS — Orchestrator v1.0         ║');
@@ -36,11 +43,17 @@ if (missingSecrets.length > 0) {
   process.exit(1);
 }
 
+if (process.env.WORKER_INTERNAL_TOKEN && process.env.WORKER_INTERNAL_TOKEN.length > 0) {
+  console.warn('[Security] WORKER_INTERNAL_TOKEN is set — this legacy static worker token bypasses per-ticket binding (any worker can reach any ticket inbox). Unset it in production once all workers use per-spawn consumer tokens.');
+}
+
 logConfigSummary();
 initAgentRoles();
 
 const registry = new WorkerRegistry();
-const docker = new DockerService();
+// Pass the registry so startWorker() can recreate an ephemeral (auto-removed)
+// worker from its stored role/roomId.
+const docker = new DockerService(registry);
 const healthMonitor = new HealthMonitor(registry, docker);
 
 const pmStateManager = new PMStateManager(priorityQueue, registry);
@@ -104,6 +117,43 @@ async function handleMatrixMessage(
 
 matrixService.setMessageHandler(handleMatrixMessage);
 
+// ─── Matrix Command Handler — admin-only slash-commands ────────────────────
+//
+// When the admin types a `/`-prefixed command in any Matrix room (Element),
+// _handleRoomEvent dispatches here. Only the configured admin (MATRIX_ADMIN_USER_ID)
+// may run commands; everyone else gets a short "unauthorized" reply. The actual
+// command logic is shared with the HTTP `POST /webhooks/matrix` route via
+// handleAdminCommand() so the two surfaces never drift. The result text is
+// posted back into the originating room.
+
+async function handleMatrixCommand(
+  command: string,
+  args: string[],
+  roomId: string,
+  sender: string
+): Promise<void> {
+  const adminUserId = config.matrix.adminUserId;
+
+  if (!adminUserId || sender !== adminUserId) {
+    console.warn(`[MatrixCmd] Rejected command ${command} from non-admin sender ${sender}`);
+    await matrixService.sendToRoom(
+      roomId,
+      `🚫 Unauthorized: only the admin may run commands.`
+    );
+    return;
+  }
+
+  try {
+    const result = await handleAdminCommand(command, args, { registry, docker, healthMonitor });
+    await matrixService.sendToRoom(roomId, result.text);
+  } catch (err) {
+    console.error(`[MatrixCmd] Command ${command} failed:`, err);
+    await matrixService.sendToRoom(roomId, `❌ Command \`${command}\` failed: ${String(err)}`);
+  }
+}
+
+matrixService.setCommandHandler(handleMatrixCommand);
+
 const autoStartRoles = config.orchestrator.autoStartRoles;
 if (autoStartRoles.length > 0) {
   console.log(`[Orchestrator] Auto-start enabled for roles: ${autoStartRoles.join(', ')}`);
@@ -122,7 +172,7 @@ docker.startEventMonitor((containerId, ticketId, action, details) => {
   }
 });
 
-healthMonitor.onScaleNeeded = async (direction) => {
+healthMonitor.onScaleNeeded = async (direction, context) => {
   if (direction === 'up') {
     const workers = registry.listActive();
     const busyTicketIds = new Set(workers.map((w) => w.ticketId));
@@ -146,18 +196,25 @@ healthMonitor.onScaleNeeded = async (direction) => {
       console.error('[Scale] Failed to spawn worker on scale up:', err);
     }
   } else if (direction === 'down') {
-    const workers = registry.listActive()
-      .filter((w) => w.status === 'RUNNING')
-      .sort((a, b) => a.startTime - b.startTime);
-    if (workers.length === 0) {
-      console.warn('[Scale] No idle workers to scale down');
+    // Prefer the most-idle worker chosen by the health monitor. Fall back to
+    // re-selecting from the live registry (same pure helper) so we never stop a
+    // worker that is actively making progress, and never breach MIN_WORKERS.
+    const now = Date.now();
+    const idleMs = config.worker.idleTimeoutMinutes * 60_000;
+    let victim = context?.idleTicketId
+      ? registry.lookupByTicket(context.idleTicketId)
+      : undefined;
+    if (!victim || victim.status !== 'RUNNING') {
+      victim = selectScaleDownVictim(registry.listActive(), now, idleMs, config.worker.minWorkers) || undefined;
+    }
+    if (!victim) {
+      console.warn('[Scale] No idle worker to scale down (none idle or at MIN_WORKERS floor)');
       return;
     }
-    const victim = workers[0];
     try {
       await docker.stopWorker(victim.ticketId);
       registry.updateStatus(victim.ticketId, 'STOPPED');
-      console.log(`[Scale] ⏹️ Stopped idle worker ${victim.ticketId} (container preserved)`);
+      console.log(`[Scale] ⏹️ Stopped most-idle worker ${victim.ticketId} (ephemeral; scale-up/start recreates it)`);
     } catch (err) {
       console.error('[Scale] Failed to stop worker on scale down:', err);
     }
@@ -170,6 +227,7 @@ const zombieTimer = setInterval(() => {
     console.error('[Orchestrator] Zombie killer error:', err)
   );
 }, zombieInterval);
+zombieTimer.unref?.();
 
 const allRoles = getAllAgentRoles();
 for (const role of allRoles) {
@@ -221,15 +279,17 @@ if (autoStartRoles.length > 0) {
 
 // ─── Express App ─────────────────────────────────────────────────────────
 const app = express();
-app.use(express.json({ limit: '1mb' }));
-app.use((req, _res, next) => {
-  if (req.path !== '/health') {
-    console.log(`[HTTP] ${req.method} ${req.path}`);
-  }
-  next();
-});
+// Capture the exact raw request bytes for every JSON request. Only the Plane
+// webhook verifier (verifyPlaneSignature) consumes req.rawBody — it must HMAC
+// the bytes Plane signed, not a re-serialized JSON.stringify(req.body).
+app.use(express.json({ limit: '1mb', verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
+// Structured request logging EARLY in the chain: assigns/echoes X-Request-Id and
+// logs one JSON line per response (info; /metrics + /health at debug to avoid
+// scrape/probe spam). This replaces the old ad-hoc `[HTTP] METHOD PATH` console log.
+app.use(requestLogger);
 
 const requireAdmin = makeRequireAdmin();
+const requireWorker = makeRequireWorkerToken();
 
 app.get('/health', async (_req, res) => {
   const workers = registry.listActive();
@@ -324,11 +384,11 @@ app.get('/health', async (_req, res) => {
 
 app.use('/webhooks', webhooksRouter(registry, docker, healthMonitor));
 
-app.get('/workers', (_req, res) => {
+app.get('/workers', requireAdmin, (_req, res) => {
   res.json(registry.listActive());
 });
 
-app.get('/workers/:ticketId', (req, res) => {
+app.get<{ ticketId: string }>('/workers/:ticketId', requireAdmin, (req, res) => {
   const worker = registry.lookupByTicket(req.params.ticketId);
   if (!worker) {
     return res.status(404).json({ error: 'Worker not found' });
@@ -336,18 +396,20 @@ app.get('/workers/:ticketId', (req, res) => {
   res.json(worker);
 });
 
-app.post('/workers/:ticketId/stop', async (req, res) => {
+app.post<{ ticketId: string }>('/workers/:ticketId/stop', requireAdmin, async (req, res) => {
   const { ticketId } = req.params;
   try {
     await docker.stopWorker(ticketId);
     registry.updateStatus(ticketId, 'STOPPED');
-    res.json({ message: 'Worker stopped (container preserved, can be restarted)', ticketId });
+    // Worker is ephemeral: the container is auto-removed on stop. A later
+    // /start recreates a fresh worker (state restored from checkpoint + volume).
+    res.json({ message: 'Worker stopped (ephemeral; /start will recreate it)', ticketId });
   } catch (error) {
     res.status(500).json({ error: `Failed to stop worker: ${error}` });
   }
 });
 
-app.post('/workers/:ticketId/start', async (req, res) => {
+app.post<{ ticketId: string }>('/workers/:ticketId/start', requireAdmin, async (req, res) => {
   const { ticketId } = req.params;
   try {
     const worker = registry.lookupByTicket(ticketId);
@@ -355,7 +417,13 @@ app.post('/workers/:ticketId/start', async (req, res) => {
       res.status(404).json({ error: `Worker ${ticketId} not found in registry` });
       return;
     }
-    await docker.startWorker(ticketId);
+    // startWorker either starts an existing stopped container or recreates a
+    // fresh ephemeral worker. Only mark RUNNING when it actually succeeded.
+    const started = await docker.startWorker(ticketId);
+    if (!started) {
+      res.status(500).json({ error: `Failed to start worker ${ticketId}: no container and no role to recreate from` });
+      return;
+    }
     registry.updateStatus(ticketId, 'RUNNING');
     res.json({ message: 'Worker started', ticketId });
   } catch (error) {
@@ -363,7 +431,7 @@ app.post('/workers/:ticketId/start', async (req, res) => {
   }
 });
 
-app.delete('/workers/:ticketId', async (req, res) => {
+app.delete<{ ticketId: string }>('/workers/:ticketId', requireAdmin, async (req, res) => {
   const { ticketId } = req.params;
   try {
     await docker.deleteWorker(ticketId);
@@ -387,7 +455,7 @@ app.delete('/workers/:ticketId', async (req, res) => {
  *   state=<state>    — filter by state (running, exited, paused)
  *   includeLogs=<n>  — attach last N log lines per container (default: 0)
  */
-app.get('/containers', async (req, res) => {
+app.get('/containers', requireWorker, async (req, res) => {
   try {
     const { role, state, includeLogs } = req.query;
     const all = await docker.listAllContainers();
@@ -483,7 +551,7 @@ app.get('/containers', async (req, res) => {
  *   lines=<n>   — number of log lines (default: 50, max: 500)
  *   errorsOnly  — if "true", return only ERROR/WARN lines
  */
-app.get('/containers/:name/logs', async (req, res) => {
+app.get<{ name: string }>('/containers/:name/logs', requireWorker, async (req, res) => {
   try {
     const { name } = req.params;
     if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(name)) {
@@ -528,6 +596,19 @@ app.get('/health/ping', (_req, res) => {
   res.json({ pong: true, ts: Date.now(), uptime: process.uptime() });
 });
 
+// ─── Prometheus metrics ────────────────────────────────────────────────────
+//
+// INTENTIONALLY UNAUTHENTICATED: Prometheus scrapers can't easily send a
+// bearer token, so /metrics is left open (the standard convention). It does
+// NOT sit behind requireAdmin. SECURITY: this endpoint must be firewalled to
+// an internal network / the scraper only — do not expose it on a public
+// interface. Gauges are sampled live from the registry + priority-queue
+// singletons; counters accumulate in-process via the gateway proxy handler.
+app.get('/metrics', (_req, res) => {
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+  res.send(renderMetrics({ registry, priorityQueue }));
+});
+
 app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   console.error('[Orchestrator] Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error', message: err.message });
@@ -535,6 +616,18 @@ app.use((err: Error, _req: express.Request, res: express.Response, _next: expres
 
 const PORT = config.port;
 const server = app.listen(PORT, '0.0.0.0', () => {
+  // Structured startup record — machine-parseable counterpart to the human
+  // banner below. Config values here are non-secret (port/intervals/counts);
+  // the logger redacts anything sensitive defensively regardless.
+  logger.info('orchestrator_started', {
+    port: PORT,
+    nodeEnv: config.nodeEnv,
+    executionMode: config.worker.executionMode,
+    maxWorkers: config.docker.maxWorkers,
+    minWorkers: config.worker.minWorkers,
+    agentRoles: getAllAgentRoles().length,
+    autoStartRoles: config.orchestrator.autoStartRoles,
+  });
   console.log('');
   console.log(`[Orchestrator] ✓ Listening on port ${PORT}`);
   console.log(`[Orchestrator] ✓ Health monitor running (every 60s)`);
@@ -544,12 +637,39 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log('');
 });
 
-function shutdown(signal: string): void {
+async function shutdown(signal: string): Promise<void> {
   console.log(`\n[Orchestrator] Received ${signal}, shutting down gracefully...`);
+
+  // Stop every long-lived timer / stream / connection so the process can
+  // exit cleanly (no leaked handles) and no data is lost on redeploy.
   matrixService.stopListening();
   healthMonitor.stop();
   clearInterval(zombieTimer);
+
+  // PM auto-persist timer (does a final saveState()).
+  pmStateManager.stopAutoPersist?.();
+
+  // Docker event-monitor stream + its 10s reconnect timers.
+  docker.stopEventMonitor?.();
+
+  // NATS connection (drains in-flight publishes).
+  await natsService.stop?.().catch?.(() => {});
+
+  // Gateway proxy handler stops its rate-limiter cleanup timer and the
+  // audit-logger flush timer (flushing buffered entries on the way out).
+  try {
+    getProxyHandler().stop?.();
+  } catch (err) {
+    console.warn('[Orchestrator] Gateway shutdown error:', err);
+  }
+
+  // Credential rotator — only stop it if it was ever instantiated (it owns
+  // an hourly setInterval). Avoids creating one just to tear it down.
+  peekCredentialRotator()?.stop?.();
+
+  // Registry persist timer + Redis client (final save to disk).
   registry.destroy();
+
   server.close(() => {
     console.log('[Orchestrator] Server closed. Goodbye!');
     process.exit(0);
@@ -557,7 +677,7 @@ function shutdown(signal: string): void {
   setTimeout(() => {
     console.error('[Orchestrator] Forced shutdown after 10s timeout');
     process.exit(1);
-  }, 10000);
+  }, 10000).unref?.();
 }
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));

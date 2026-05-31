@@ -1,4 +1,4 @@
-.PHONY: help bootstrap build up down logs ps restart clean doctor test test-quick quickstart status update replay
+.PHONY: help bootstrap build up down logs ps restart clean doctor test test-quick quickstart status update replay gen-secrets
 
 # Turing OS Makefile
 # Usage: make [target]
@@ -41,6 +41,7 @@ help:
 	@echo -e "$(GREEN)Utilities:$(NC)"
 	@echo "  quickstart      Show quick start guide"
 	@echo "  update          Pull latest changes"
+	@echo "  gen-secrets     Generate strong values for required .env secrets"
 	@echo ""
 	@echo -e "$(YELLOW)Examples:$(NC)"
 	@echo "  make up              # Start services"
@@ -154,6 +155,24 @@ quickstart:
 	@echo "   - Run: make logs"
 	@echo "   - Review docs in BookStack after completion"
 	@echo ""
+
+## gen-secrets - Generate strong values for required .env secrets
+gen-secrets:
+	@echo -e "$(BLUE)[GEN-SECRETS] Strong values for the REQUIRED .env secrets$(NC)"
+	@echo -e "$(YELLOW)Copy each line into your .env (replace the CHANGE_ME_* placeholders).$(NC)"
+	@echo -e "$(YELLOW)Windows PowerShell users: run 'openssl rand -hex 32' per var if make is unavailable.$(NC)"
+	@echo ""
+	@command -v openssl >/dev/null 2>&1 || { echo -e "$(YELLOW)openssl not found — install it, or run: openssl rand -hex 32 elsewhere.$(NC)"; exit 1; }
+	@for v in PLANE_DB_PASSWORD PLANE_RMQ_PASSWORD PLANE_SECRET_KEY PLANE_MINIO_ROOT_PASSWORD \
+	          BOOKSTACK_DB_PASSWORD BOOKSTACK_DB_ROOT_PASSWORD \
+	          SYNAPSE_REGISTRATION_SECRET SYNAPSE_ADMIN_PASSWORD ADMIN_PASSWORD \
+	          JWT_SECRET VAULT_MASTER_KEY WORKER_INTERNAL_TOKEN PLANE_WEBHOOK_SECRET; do \
+		echo "$$v=$$(openssl rand -hex 32)"; \
+	done
+	@echo "ADMIN_API_TOKEN=$$(openssl rand -hex 16)"
+	@echo "BOOKSTACK_APP_KEY=base64:$$(openssl rand -base64 32)"
+	@echo ""
+	@echo -e "$(GREEN)[GEN-SECRETS] Done. Paste the above into .env (do NOT commit it).$(NC)"
 
 ## update - Pull latest changes
 update:

@@ -216,27 +216,23 @@ export class AlertManager {
       system: 'turing-os',
     };
 
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+    // Errors propagate to the .catch() in sendAlert.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
 
-      const response = await fetch(this.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-      });
+    const response = await fetch(this.webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
 
-      clearTimeout(timeout);
+    clearTimeout(timeout);
 
-      if (!response.ok) {
-        console.error(`[AlertManager] Webhook returned ${response.status}`);
-      } else {
-        console.log(`[AlertManager] Webhook sent successfully`);
-      }
-    } catch (err) {
-      // Re-throw for the .catch() in sendAlert to handle
-      throw err;
+    if (!response.ok) {
+      console.error(`[AlertManager] Webhook returned ${response.status}`);
+    } else {
+      console.log(`[AlertManager] Webhook sent successfully`);
     }
   }
 }
