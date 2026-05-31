@@ -84,6 +84,14 @@ describe('RBAC', () => {
     expect(hasPermission(perms, 'github:repo')).toBe(true);
   });
 
+  it('should grant remediation:execute ONLY to the doctor role (P4b)', () => {
+    expect(ROLE_PERMISSIONS['doctor']).toContain('remediation:execute');
+    for (const role of roles) {
+      if (role === 'doctor') continue;
+      expect(ROLE_PERMISSIONS[role]).not.toContain('remediation:execute');
+    }
+  });
+
   it('should limit hr to 20 requests per minute', () => {
     expect(ROLE_RATE_LIMITS['hr'].requests).toBe(20);
   });
@@ -150,6 +158,7 @@ describe('RBAC', () => {
       /^bookstack:(read|write|\*)$/,
       /^matrix:(read|write|\*)$/,
       /^github:(read|write|repo|\*)$/,
+      /^remediation:execute$/,
     ];
 
     for (const role of roles) {

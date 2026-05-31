@@ -1,61 +1,83 @@
 ---
 name: doctor-tools-guide
-description: **SKILL** — Advanced Doctor Agent tool-building guide. Use when: generating new fix scripts dynamically, patching config files (.env, docker-compose.yml), invoking cross-worker tools, creating self-healing tools on-the-fly. Triggers: "tạo tool mới", "fix config", "sinh tool tự động", "gọi tool worker khác", "dynamic tool creation", "patch config"
+description: **SKILL** — Doctor Agent remediation guide. Use when: running allow-listed remediation via the orchestrator, invoking cross-worker tools, or understanding why dynamic-script creation / arbitrary config patching are disabled. Triggers: "remediation", "restart container", "fix config", "gọi tool worker khác", "patch config", "orchestrator remediation"
 ---
 
-# Doctor Tools Guide — Dynamic Tool Building & Config Patching
+# Doctor Tools Guide — Orchestrator-Mediated Remediation & Cross-Worker Tools
 
-> Doctor có thể **tự tạo tool mới** khi cần thiết — không chỉ chạy fix script có sẵn, mà còn **sinh ra script fix mới** hoặc **patch config** ngay lập tức.
+> Fix execution is **orchestrator-mediated**: Doctor's `run_fix_script()` maps a
+> fix name onto an **allow-listed** action and `POST`s it to
+> `{ORCHESTRATOR_URL}/remediation`, where the orchestrator runs it via Dockerode
+> with audit + RBAC. The worker has **no Docker socket** and runs **no local
+> scripts**. Dynamic fix-script creation is **disabled** and arbitrary config
+> patching is **gated** — both for safety.
 
 ---
 
-## 1. Dynamic Tool Generation — `create_dynamic_fix_script()`
+## 1. Allow-Listed Remediation — `run_fix_script(fix_name, target)`
 
-Doctor có thể tạo script fix mới khi không có script phù hợp trong `scripts/doctor-fixes/`.
+The only way Doctor executes a fix. `run_fix_script()` maps a fix name onto one of
+the orchestrator's closed allow-list of actions and `POST`s it to
+`{ORCHESTRATOR_URL}/remediation` with the worker's `CONSUMER_TOKEN`.
 
-### Cách hoạt động
+| Action | Notes |
+|--------|-------|
+| `restart_container` | Restart a worker container (`turing-worker=true` only) by ticketId/name; worker token OK |
+| `check_disk_usage` | Read-only `docker system df`; worker token OK |
+| `cleanup_docker` | Prune dangling images/volumes + unused networks; requires `ADMIN_API_TOKEN` |
+
+Fix-name mappings: `restart_container` / `restart_service` / `restart_pm` →
+`restart_container`; `check_disk_usage` → `check_disk_usage`; `cleanup_docker` →
+`cleanup_docker` (admin). Unknown actions are rejected (HTTP 400); unmapped fix
+names short-circuit with a clear message.
 
 ```python
-TOOL_CALL: create_dynamic_fix_script
-ARGUMENTS: {
-  "fix_name": "fix_nginx_502",
-  "target_issue": "nginx returns 502 Bad Gateway when upstream is slow",
-  "code_content": "docker compose restart nginx\n# Verify\nsleep 3\ncurl -f http://localhost:8080"
-}
+# Restart a crashed worker container
+TOOL_CALL: run_fix_script
+ARGUMENTS: {"fix_name": "restart_container", "target": "ticket-42"}
+
+# Read-only disk usage
+TOOL_CALL: run_fix_script
+ARGUMENTS: {"fix_name": "check_disk_usage"}
 ```
 
 ### Luồng hoạt động
 
 ```
-1. Doctor phát hiện lỗi chưa có fix script
-2. Doctor SUY NGHĨ: "Cần fix gì?"
-3. Doctor gọi create_dynamic_fix_script() 
-   → Tạo script mới trong scripts/doctor-fixes/
-4. Doctor gọi run_fix_script(fix_name) 
-   → Chạy script vừa tạo
-5. Nếu fix thành công 
-   → Lưu vào known_issues DB
-   → Script mới được ghi nhận
+1. Doctor phát hiện lỗi → diagnose (parse_docker_logs, check_recent_errors)
+2. Doctor chọn action allow-listed phù hợp (restart_container / check_disk_usage / cleanup_docker)
+3. run_fix_script(fix_name, target)
+   → POST {ORCHESTRATOR_URL}/remediation (CONSUMER_TOKEN)
+   → orchestrator chạy action bằng Dockerode, audit + RBAC
+4. verify_fix() → confirm
+5. Nếu fix thành công → save_to_known_issues() (gateway BookStack)
+   Nếu không có action phù hợp → escalate (create_github_issue via /gateway/github)
 ```
 
 ---
 
-## 2. Config Patching — `patch_config_file()`
+## 2. Dynamic Tool Generation — DISABLED for safety
 
-Doctor có thể patch trực tiếp các file config khi lỗi do misconfiguration.
+`create_dynamic_fix_script()` used to write an LLM-generated `.ps1`/`.sh` into
+`scripts/doctor-fixes/` and execute it locally. That local write+exec path is
+unsafe and now has **no consumer** — `run_fix_script` no longer runs local
+scripts. The function is kept inert (writes nothing, executes nothing) and returns
+`{ disabled: true }`. When no allow-listed action fits, **escalate to a human**
+via `create_github_issue`.
 
-### Supported Config Files
+---
 
-| File | Patching Capability |
-|------|---------------------|
-| `.env` | Add/change/remove env vars |
-| `docker-compose.yml` | Change image, ports, environment, restart policy |
-| `docker-compose.override.yml` | Local overrides (restart policy, limits) |
-| `synapse/homeserver.yaml` | Change Matrix/Synapse settings |
+## 3. Config Patching — `patch_config_file()` — GATED, off by default
 
-### Ví dụ: Patch .env
+`patch_config_file()` returns disabled unless `DOCTOR_ALLOW_CONFIG_PATCH=true`.
+Even when enabled it is **workspace-only**: absolute paths and `..` traversal are
+rejected, and the worker only mounts `/workspace`, so the host
+repo/compose/`.env`/`synapse/homeserver.yaml` are **not reachable**. Host config
+changes must be escalated to a human / DevOps. Supported ops when enabled:
+`set`, `remove`, `reset` (`append` is rejected).
 
 ```python
+# Disabled by default — returns { disabled: true, needs_confirmation: true }
 TOOL_CALL: patch_config_file
 ARGUMENTS: {
   "file_path": ".env",
@@ -65,32 +87,9 @@ ARGUMENTS: {
 }
 ```
 
-### Ví dụ: Patch docker-compose.yml
-
-```python
-TOOL_CALL: patch_config_file
-ARGUMENTS: {
-  "file_path": "docker-compose.override.yml",
-  "operation": "set",
-  "path": "services.orchestrator.environment.WORKER_TIMEOUT",
-  "value": "300"
-}
-```
-
-### Ví dụ: Reset config về mặc định
-
-```python
-TOOL_CALL: patch_config_file
-ARGUMENTS: {
-  "file_path": ".env",
-  "operation": "reset",
-  "key": "WORKER_MEMORY_LIMIT"
-}
-```
-
 ---
 
-## 3. Cross-Worker Tool Invocation — `invoke_worker_tool()`
+## 4. Cross-Worker Tool Invocation — `invoke_worker_tool()`
 
 Doctor có thể gọi **tool từ worker khác** khi cần khả năng đặc biệt.
 
@@ -127,111 +126,58 @@ ARGUMENTS: {
 
 ---
 
-## 4. Tự Động Tạo Tool Mới — Complete Flow
+## 5. Remediation Flow — Complete
 
 ```
-PHÁT HIỆN LỖI MỚI
-      │
-      ▼
-┌─────────────────────┐
-│ Có fix script chưa? │
-└─────────────────────┘
-    KHÔNG
+PHÁT HIỆN LỖI
       │
       ▼
 ┌─────────────────────────────────────────┐
 │ 1. ANALYZE: Doctor phân tích lỗi         │
-│    → Gọi check_recent_errors()          │
-│    → Gọi parse_docker_logs()            │
+│    → check_recent_errors()              │
+│    → parse_docker_logs() (via relay)    │
 │    → Xác định root cause                │
 └─────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────┐
-│ 2. GENERATE: Tạo script fix mới          │
-│    → create_dynamic_fix_script()        │
-│    → Lưu vào scripts/doctor-fixes/       │
-│    → verify_python_syntax()             │
+│ 2. KNOWN ISSUES (gateway BookStack)      │
+│    → query_known_issues_db()            │
+│    → Match? apply known fix             │
 └─────────────────────────────────────────┘
       │
       ▼
 ┌─────────────────────────────────────────┐
-│ 3. EXECUTE: Chạy script vừa tạo          │
-│    → run_fix_script(new_fix_name)        │
+│ 3. REMEDIATE (allow-listed)              │
+│    → run_fix_script(fix_name, target)    │
+│    → POST {ORCHESTRATOR_URL}/remediation │
+│       restart_container / check_disk_    │
+│       usage / cleanup_docker [admin]    │
+│    → orchestrator chạy = Dockerode + audit│
+└─────────────────────────────────────────┘
+      │
+      ▼
+┌─────────────────────────────────────────┐
+│ 4. VERIFY & LEARN                        │
 │    → verify_fix()                       │
-└─────────────────────────────────────────┘
-      │
-      ▼
-┌─────────────────────────────────────────┐
-│ 4. LEARN: Ghi nhận vào known-issues      │
-│    → save_to_known_issues()             │
+│    → save_to_known_issues() (gateway BS) │
 │    → track_metrics("fix_success_rate")   │
-│    → Script mới → part of corpus        │
+│    → Không fix được? escalate            │
+│       create_github_issue (/gateway/github)│
 └─────────────────────────────────────────┘
 ```
 
 ---
 
-## 5. Config Patching — Detailed Examples
-
-### 5.1 Fix .env Memory Setting
-
-```python
-TOOL_CALL: patch_config_file
-ARGUMENTS: {
-  "file_path": ".env",
-  "operation": "set",
-  "key": "WORKER_MEMORY_LIMIT",
-  "value": "1g"
-}
-```
-
-### 5.2 Fix Worker Timeout Setting
-
-```python
-TOOL_CALL: patch_config_file
-ARGUMENTS: {
-  "file_path": ".env",
-  "operation": "set",
-  "key": "WORKER_TIMEOUT",
-  "value": "600"
-}
-```
-
-### 5.3 Fix Docker Compose Restart Policy
-
-```python
-TOOL_CALL: patch_config_file
-ARGUMENTS: {
-  "file_path": "docker-compose.override.yml",
-  "operation": "set",
-  "path": "services.orchestrator.restart",
-  "value": "on-failure:3"
-}
-```
-
-### 5.4 Reset Config Key
-
-```python
-TOOL_CALL: patch_config_file
-ARGUMENTS: {
-  "file_path": ".env",
-  "operation": "reset",
-  "key": "DEBUG_MODE"
-}
-```
-
----
-
-## 6. Auto-Detection Map — Khi nào Doctor tự tạo tool mới?
+## 6. Auto-Detection Map — Doctor chọn action nào?
 
 | Lỗi Pattern | Doctor Action |
 |-------------|---------------|
-| Config sai → chưa có script fix | → `patch_config_file()` |
-| Lỗi mới, chưa từng thấy | → `create_dynamic_fix_script()` |
-| Cần tool từ worker khác | → `invoke_worker_tool()` |
-| Script fix cũ không work | → Tạo script mới + `create_dynamic_fix_script()` |
-| Lỗi liên quan đến config file | → `patch_config_file()` |
+| Container crash / unhealthy | → `run_fix_script("restart_container", target)` |
+| Disk pressure / disk full | → `run_fix_script("check_disk_usage")` → `cleanup_docker` [admin] |
+| Cần khả năng từ worker khác | → `invoke_worker_tool()` |
+| Lỗi mới, không có action phù hợp | → escalate: `create_github_issue()` (KHÔNG tạo script mới — đã disabled) |
+| Cần đổi host config | → escalate to human / DevOps (`patch_config_file` gated, workspace-only) |
 
 ---
 
@@ -239,7 +185,7 @@ ARGUMENTS: {
 
 | File | Purpose |
 |------|---------|
-| `base-worker/src/tools/doctor_tools.py` | All Doctor tools including new dynamic ones |
-| `scripts/doctor-fixes/` | Directory where new scripts are saved |
+| `base-worker/src/tools/doctor_tools.py` | All Doctor tools (incl. disabled `create_dynamic_fix_script`, gated `patch_config_file`) |
+| `orchestrator/src/core/remediation.ts` | Allow-listed remediation actions (orchestrator-side, Dockerode + audit) |
 | `base-worker/src/tools/tool_registry.py` | Cross-worker tool registry |
 | `roles/doctor.md` | Doctor role definition |

@@ -18,6 +18,12 @@ import { PMStateManager } from './core/pm-state';
 import { natsService } from './core/nats';
 import { peekCredentialRotator } from './core/credential-rotator';
 import { renderMetrics } from './core/metrics';
+import {
+  REMEDIATION_ACTIONS,
+  isKnownAction,
+  executeRemediation,
+} from './core/remediation';
+import type { TokenPayload } from './core/consumer-token';
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────
 // TODO(observability): migrate remaining console.* to logger incrementally.
@@ -344,6 +350,9 @@ app.get('/health', async (_req, res) => {
   app.all('/gateway/matrix/*', async (req, res) => {
     await proxyHandler.handleRequest(req, res);
   });
+  app.all('/gateway/github/*', async (req, res) => {
+    await proxyHandler.handleRequest(req, res);
+  });
   app.get('/gateway/health', (_req, res) => {
     const vault = getCredentialVault();
     const tokenManager = getConsumerTokenManager();
@@ -591,6 +600,83 @@ app.get<{ name: string }>('/containers/:name/logs', requireWorker, async (req, r
     res.status(500).json({ error: `Failed to get logs: ${error}` });
   }
 });
+
+// ─── Orchestrator-mediated remediation (P4b) ───────────────────────────────
+//
+// The Doctor worker has NO docker socket/CLI (least-privilege). Instead it
+// calls this allow-listed, audited endpoint; the orchestrator (which owns
+// docker via DockerService) performs the action. See core/remediation.ts.
+//
+// GUARDS:
+//   1. requireWorker — caller must present a valid worker token (Doctor uses
+//      its CONSUMER_TOKEN). requireWorker attaches the validated JWT payload to
+//      req.workerToken (P2-5).
+//   2. remediation:execute — only the `doctor` role carries this permission
+//      (rbac.ts). We read the role from the JWT payload and reject everyone
+//      else with 403. (The legacy static WORKER_INTERNAL_TOKEN carries no
+//      identity → no payload → rejected here, which is the desired fail-closed
+//      behaviour for this sensitive endpoint.)
+//   3. requiresAdmin actions (e.g. cleanup_docker, which prunes daemon-wide)
+//      ALSO require ADMIN_API_TOKEN. We compose requireAdmin for those: a
+//      worker-token-only caller is rejected (401) before the action runs.
+//      restart_container (worker target only) and check_disk_usage (read-only)
+//      need only the doctor worker token.
+function handleRemediation(req: express.Request, res: express.Response): void {
+  const action = String(req.params.action || req.body?.action || '').trim();
+  const target = req.body?.target !== undefined ? String(req.body.target) : undefined;
+
+  if (!action) {
+    res.status(400).json({ error: 'Missing remediation action' });
+    return;
+  }
+  if (!isKnownAction(action)) {
+    res.status(400).json({
+      error: `Unknown remediation action "${action}"`,
+      allowed: Object.keys(REMEDIATION_ACTIONS),
+    });
+    return;
+  }
+
+  // requireWorker already validated the token and attached the payload.
+  const payload = (req as unknown as { workerToken?: TokenPayload }).workerToken;
+  const role = payload?.role;
+  if (role !== 'doctor') {
+    logger.warn('remediation_denied', {
+      action,
+      reason: 'role lacks remediation:execute',
+      callerRole: role,
+      callerWorkerId: payload?.workerId,
+    });
+    res.status(403).json({ error: 'Forbidden: remediation:execute is restricted to the doctor role' });
+    return;
+  }
+
+  const spec = REMEDIATION_ACTIONS[action];
+
+  const run = async (): Promise<void> => {
+    const result = await executeRemediation(action, { target }, docker, {
+      role,
+      ticketId: payload?.meta?.ticketId,
+      workerId: payload?.workerId,
+      tokenId: payload?.jti,
+    });
+    res.status(result.ok ? 200 : 422).json(result);
+  };
+
+  // Admin-gated actions: compose requireAdmin BEFORE executing. requireAdmin
+  // calls next() on success or sends 401/503 itself on failure.
+  if (spec.requiresAdmin) {
+    requireAdmin(req, res, () => {
+      run().catch((err) => res.status(500).json({ error: `Remediation failed: ${err}` }));
+    });
+    return;
+  }
+
+  run().catch((err) => res.status(500).json({ error: `Remediation failed: ${err}` }));
+}
+
+app.post('/remediation', requireWorker, handleRemediation);
+app.post<{ action: string }>('/remediation/:action', requireWorker, handleRemediation);
 
 app.get('/health/ping', (_req, res) => {
   res.json({ pong: true, ts: Date.now(), uptime: process.uptime() });

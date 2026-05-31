@@ -5,26 +5,45 @@ Provides tools for:
 - System health monitoring (CPU, memory, disk, Docker, network)
 - Docker log parsing and error aggregation
 - Service connectivity checks (Plane, Wiki, Matrix, Context7, GitHub)
-- Known issues database (BookStack)
-- GitHub issue creation
+- Known issues database (BookStack via gateway REST)
+- GitHub issue creation (via gateway)
 - Self-healing fix scripts execution and verification
 - Metrics tracking
 - Doctor dashboard summary
 - Admin communication for confirmations
 - Fix success/failure reporting
 
+Gateway-only design:
+    All credentialed calls route through the orchestrator gateway using the
+    worker's per-spawn CONSUMER_TOKEN. Raw provider secrets (the BookStack REST
+    `Token`, the GitHub PAT, the Matrix bot access token) are held by the
+    orchestrator/gateway and never enter the worker container.
+
+    * BookStack known-issues / metrics / dashboard storage reuses
+      ``bookstack_tools`` (``{GATEWAY_URL}/gateway/bookstack/<rest>`` with
+      ``Authorization: Bearer {CONSUMER_TOKEN}``).
+    * GitHub issue creation routes through
+      ``{GATEWAY_URL}/gateway/github/repos/{owner}/{repo}/issues``.
+    * Admin confirmations relay through ``{ORCHESTRATOR_URL}/webhooks/...``.
+
+BookStack page convention (see bookstack_tools for the underlying REST model):
+    A single book named ``Doctor`` holds every doctor-managed page.
+        - Known issues  → page titled ``Known Issue: {error_key}`` (markdown).
+        - Metrics       → page titled ``Metric: {metric_name}`` (markdown table).
+        - Fix outcomes  → page titled ``Fix Outcomes`` (markdown tables).
+    Pages are located by title via ``search_pages`` and created/updated via
+    ``create_page`` / ``update_page``.
+
 Environment variables:
+    GATEWAY_URL         — Orchestrator gateway base URL (gateway-mode workers)
+    CONSUMER_TOKEN      — Per-worker JWT used for every gateway/orchestrator call
     ORCHESTRATOR_URL    — Orchestrator API URL (default: http://turing-orchestrator:3001)
-    BOOKSTACK_URL            — BookStack URL (default: http://wiki:3000)
-    BOOKSTACK_TOKEN      — BookStack JWT auth token
-    GITHUB_TOKEN        — GitHub API token (fallback; primary token fetched from Wiki /secrets/)
     PLANE_API_URL       — Plane API URL (default: http://turing_plane_api:8000/api/v1)
-    PLANE_API_TOKEN       — Plane API key
-    MATRIX_ROOM_ID      — Matrix room for admin communication
-    MATRIX_BOT_TOKEN    — Matrix bot auth token
+    PLANE_API_TOKEN     — Plane API key
     SYNAPSE_API_URL     — Synapse homeserver URL (default: http://synapse:8008)
-    GITHUB_REPO_OWNER   — GitHub repo owner (default: from env or 'turing-os')
-    GITHUB_REPO_NAME    — GitHub repo name (default: from env or 'turing-os')
+    GITHUB_REPO         — GitHub repo as ``owner/name`` (e.g. louisphamdev/turing-os)
+    GITHUB_REPO_OWNER   — GitHub repo owner (fallback when GITHUB_REPO unset)
+    GITHUB_REPO_NAME    — GitHub repo name (fallback when GITHUB_REPO unset)
 """
 
 import os
@@ -39,21 +58,31 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # ─── Environment ────────────────────────────────────────────────────────────────
 
 ORCHESTRATOR_URL = os.environ.get('ORCHESTRATOR_URL', 'http://turing-orchestrator:3001')
+GATEWAY_URL = os.environ.get('GATEWAY_URL', '').rstrip('/')
+CONSUMER_TOKEN = os.environ.get('CONSUMER_TOKEN', '')
+# Used only for unauthenticated health/connectivity probes; carries no secret.
+# All credentialed BookStack access goes through bookstack_tools via the gateway.
 BOOKSTACK_URL = os.environ.get('BOOKSTACK_URL', 'http://wiki:3000')
-BOOKSTACK_TOKEN = os.environ.get('BOOKSTACK_TOKEN', '')
-GITHUB_TOKEN_FALLBACK = os.environ.get('GITHUB_TOKEN', '')
 PLANE_API_URL = os.environ.get('PLANE_API_URL', 'http://turing_plane_api:8000/api/v1')
 PLANE_API_TOKEN = os.environ.get('PLANE_API_TOKEN', '')
-MATRIX_ROOM_ID = os.environ.get('MATRIX_ROOM_ID', '')
-MATRIX_BOT_TOKEN = os.environ.get('MATRIX_BOT_TOKEN', '')
 SYNAPSE_API_URL = os.environ.get('SYNAPSE_API_URL', 'http://synapse:8008')
-GITHUB_REPO_OWNER = os.environ.get('GITHUB_REPO_OWNER', 'turing-os')
-GITHUB_REPO_NAME = os.environ.get('GITHUB_REPO_NAME', 'turing-os')
 
-# ─── Token Cache (avoids repeated BookStack lookups per execution) ─────────────
-_GITHUB_TOKEN_CACHE: Optional[str] = None
-_GITHUB_TOKEN_FETCHED_AT: float = 0.0
-_TOKEN_CACHE_TTL: float = 300.0  # 5 minutes
+# Repo is canonically `owner/name` via GITHUB_REPO; fall back to the legacy
+# split owner/name vars for backwards compatibility.
+def _github_repo() -> tuple[str, str]:
+    repo = os.environ.get('GITHUB_REPO', '').strip()
+    if '/' in repo:
+        owner, _, name = repo.partition('/')
+        if owner and name:
+            return owner, name
+    return (
+        os.environ.get('GITHUB_REPO_OWNER', 'turing-os'),
+        os.environ.get('GITHUB_REPO_NAME', 'turing-os'),
+    )
+
+
+# BookStack book that holds all doctor-managed pages.
+DOCTOR_BOOK_NAME = os.environ.get('DOCTOR_BOOK_NAME', 'Doctor')
 
 
 # ─── 1. System Health ─────────────────────────────────────────────────────────
@@ -769,31 +798,71 @@ def find_containers_by_role(role: str) -> dict:
 
 # ─── 5 & 6. BookStack Known Issues DB ─────────────────────────────────────────
 
-def _wiki_request(query: str, variables: dict = None) -> dict:
-    """Internal helper for BookStack GraphQL requests."""
-    import requests
+def _bookstack():
+    """Import bookstack_tools lazily so the module loads even if requests is absent.
 
-    url = f"{BOOKSTACK_URL}/graphql"
-    headers = {
-        'Authorization': f'Bearer {BOOKSTACK_TOKEN}',
-        'Content-Type': 'application/json',
-    }
-    body: dict = {'query': query}
-    if variables:
-        body['variables'] = variables
-
-    if not BOOKSTACK_TOKEN:
-        return {'error': 'BOOKSTACK_TOKEN not configured'}
-
+    bookstack_tools routes every call through the gateway proxy
+    (``{GATEWAY_URL}/gateway/bookstack/<rest>``) using the worker's
+    CONSUMER_TOKEN; the gateway injects the real BookStack ``Token`` and
+    forwards to BookStack's REST ``/api/...`` endpoints.
+    """
     try:
-        resp = requests.post(url, headers=headers, json=body, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        if 'errors' in data:
-            return {'error': '; '.join(e.get('message', str(e)) for e in data['errors'])}
-        return data.get('data', {})
-    except Exception as e:
-        return {'error': str(e)}
+        from tools import bookstack_tools  # runtime: base-worker/src on path
+    except ImportError:
+        from src.tools import bookstack_tools  # tests/CI import style
+    return bookstack_tools
+
+
+def _ensure_doctor_book() -> dict:
+    """Ensure the Doctor book exists and return it ({'id', 'name', ...} or error)."""
+    bs = _bookstack()
+    return bs.ensure_book(DOCTOR_BOOK_NAME, 'Doctor agent: known issues, metrics, fix outcomes')
+
+
+def _find_doctor_page(title: str) -> Optional[dict]:
+    """Locate a doctor page by exact title via BookStack search.
+
+    Returns the matching search hit ({'id', 'name', ...}) or None.
+    """
+    bs = _bookstack()
+    for hit in bs.search_pages(title, count=30):
+        if hit.get('type') == 'page' and hit.get('name', '').strip() == title.strip():
+            return hit
+    return None
+
+
+def _read_doctor_page_content(title: str) -> str:
+    """Return the markdown (preferred) or html content of a doctor page by title."""
+    hit = _find_doctor_page(title)
+    if not hit:
+        return ''
+    bs = _bookstack()
+    page = bs.read_page(str(hit.get('id', '')))
+    if 'error' in page:
+        return ''
+    return page.get('markdown') or page.get('html') or ''
+
+
+def _upsert_doctor_page(title: str, content: str) -> dict:
+    """Create or update a doctor page by title, returning a normalized dict.
+
+    Returns {'success': bool, 'page_id', 'error'?}.
+    """
+    bs = _bookstack()
+    hit = _find_doctor_page(title)
+    if hit:
+        result = bs.update_page(int(hit['id']), title=title, content=content, markdown=True)
+        if 'error' in result:
+            return {'success': False, 'error': result['error']}
+        return {'success': True, 'page_id': result.get('id', hit['id'])}
+
+    book = _ensure_doctor_book()
+    if 'error' in book or not book.get('id'):
+        return {'success': False, 'error': book.get('error', 'could not resolve Doctor book')}
+    result = bs.create_page(int(book['id']), title, content, markdown=True)
+    if 'error' in result:
+        return {'success': False, 'error': result['error']}
+    return {'success': True, 'page_id': result.get('id')}
 
 
 def _parse_known_issue_page(content: str) -> dict:
@@ -834,7 +903,12 @@ def _parse_known_issue_page(content: str) -> dict:
 
 def query_known_issues_db(error_pattern: str) -> list:
     """
-    Search the known issues database in BookStack at /doctor/known-issues/.
+    Search the known issues database in BookStack (the ``Doctor`` book) via the
+    gateway REST proxy.
+
+    Known issues are stored as pages titled ``Known Issue: {error_key}``. This
+    searches for matching pages, reads each one, parses its structured fields,
+    and returns those whose error_key/pattern/symptoms/fix match the query.
 
     Args:
         error_pattern: Search query string to match against known issue patterns,
@@ -842,46 +916,37 @@ def query_known_issues_db(error_pattern: str) -> list:
     Returns:
         list of matching known issue records (error_key, symptoms, causes, fix, pattern)
     """
-    query = """
-    query($path: String!) {
-      pages {
-        list(filter: { parentPath: $path }, limit: 100) {
-          id
-          title
-          path
-        }
-      }
-    }
-    """
-    data = _wiki_request(query, {'path': '/doctor/known-issues'})
-    if 'error' in data:
-        return [{'error': data['error']}]
+    bs = _bookstack()
+    # Search constrained to known-issue pages: combine the marker with the query.
+    hits = bs.search_pages(f'"Known Issue:" {error_pattern}', count=50)
+    if not hits:
+        # Fall back to a marker-only search so listing still works.
+        hits = bs.search_pages('Known Issue:', count=100)
 
-    pages = data.get('pages', {}).get('list', [])
     results = []
-
-    for page in pages:
-        page_query = """
-        query($id: Int!) {
-          pages {
-            single(id: $id) {
-              id
-              title
-              content
-            }
-          }
-        }
-        """
-        page_data = _wiki_request(page_query, {'id': page['id']})
-        if 'error' in page_data:
+    seen_ids = set()
+    for hit in hits:
+        if hit.get('type') != 'page':
             continue
+        title = hit.get('name', '')
+        if not title.startswith('Known Issue:'):
+            continue
+        page_id = str(hit.get('id', ''))
+        if page_id in seen_ids:
+            continue
+        seen_ids.add(page_id)
 
-        page_info = page_data.get('pages', {}).get('single', {})
-        content = page_info.get('content', '')
+        page = bs.read_page(page_id)
+        if 'error' in page:
+            continue
+        content = page.get('markdown') or page.get('html') or ''
 
         issue = _parse_known_issue_page(content)
-        issue['title'] = page_info.get('title', '')
-        issue['path'] = page.get('path', '')
+        issue['title'] = title
+        issue['page_id'] = page.get('id', page_id)
+        # The title encodes the canonical key; trust it over the body parse,
+        # whose 2-column "Field | Value" table is ambiguous.
+        issue['error_key'] = title[len('Known Issue:'):].strip()
 
         # Match against error_pattern
         search_target = ' '.join([
@@ -889,6 +954,7 @@ def query_known_issues_db(error_pattern: str) -> list:
             issue.get('pattern', ''),
             issue.get('symptoms', ''),
             issue.get('fix', ''),
+            title,
         ]).lower()
         if error_pattern.lower() in search_target:
             results.append(issue)
@@ -904,7 +970,12 @@ def save_to_known_issues(
     pattern: str,
 ) -> dict:
     """
-    Save a new known issue record to BookStack at /doctor/known-issues/.
+    Save a known issue record to BookStack (the ``Doctor`` book) via the gateway
+    REST proxy.
+
+    The record is stored as a page titled ``Known Issue: {error_key}``. If a
+    page with that title already exists it is updated in place; otherwise a new
+    page is created.
 
     Args:
         error_key: Unique identifier for this error class
@@ -917,8 +988,6 @@ def save_to_known_issues(
     """
     timestamp = datetime.now(timezone.utc).isoformat()
     title = f"Known Issue: {error_key}"
-    safe_key = error_key.lower().replace(' ', '-').replace('/', '-')
-    path = f"doctor/known-issues/{safe_key}"
 
     content_lines = [
         f"# {error_key}",
@@ -949,69 +1018,18 @@ def save_to_known_issues(
     ]
     content = '\n'.join(content_lines)
 
-    mutation = """
-    mutation($title: String!, $content: String!, $path: String!, $isPublish: Boolean!) {
-      pages {
-        create(
-          title: $title,
-          content: $content,
-          path: $path,
-          isPublish: $isPublish,
-          contentType: "markdown"
-        ) {
-          id
-          title
-          path
-        }
-      }
-    }
-    """
-    result = _wiki_request(mutation, {
-        'title': title,
-        'content': content,
-        'path': path,
-        'isPublish': True,
-    })
+    result = _upsert_doctor_page(title, content)
+    if not result.get('success'):
+        return {'success': False, 'error': result.get('error', 'unknown error')}
 
-    if 'error' in result:
-        return {'success': False, 'error': result['error']}
-
-    page = result.get('pages', {}).get('create', {})
     return {
         'success': True,
-        'page_id': page.get('id'),
-        'page_path': page.get('path'),
+        'page_id': result.get('page_id'),
+        'page_path': title,
     }
 
 
 # ─── 7. GitHub Issue Creation ─────────────────────────────────────────────────
-
-def _get_github_token() -> str:
-    """Get GitHub token with caching: Wiki secret first → env var fallback."""
-    global _GITHUB_TOKEN_CACHE, _GITHUB_TOKEN_FETCHED_AT
-    now = time.time()
-    if _GITHUB_TOKEN_CACHE is not None and (now - _GITHUB_TOKEN_FETCHED_AT) < _TOKEN_CACHE_TTL:
-        return _GITHUB_TOKEN_CACHE
-
-    token = GITHUB_TOKEN_FALLBACK
-    if BOOKSTACK_TOKEN:
-        try:
-            import requests
-            resp = requests.get(
-                f'{BOOKSTACK_URL}/api/secrets/doctor-github-token',
-                headers={'Authorization': f'Bearer {BOOKSTACK_TOKEN}'},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                token = data.get('value', '') or data.get('secret', '') or GITHUB_TOKEN_FALLBACK
-        except Exception:
-            pass
-
-    _GITHUB_TOKEN_CACHE = token
-    _GITHUB_TOKEN_FETCHED_AT = now
-    return token
-
 
 def create_github_issue(
     title: str,
@@ -1020,9 +1038,14 @@ def create_github_issue(
     assignees: list = None,
 ) -> dict:
     """
-    Create a GitHub issue via the REST API.
+    Create a GitHub issue via the orchestrator gateway.
 
-    Token priority: BookStack /api/secrets/doctor-github-token → GITHUB_TOKEN env var.
+    Routes through ``{GATEWAY_URL}/gateway/github/repos/{owner}/{repo}/issues``
+    (POST) authenticated with the worker's CONSUMER_TOKEN. The gateway injects
+    the real GitHub credential and forwards to GitHub's REST API; the raw PAT
+    never enters the worker container.
+
+    The repo (``owner/name``) comes from the ``GITHUB_REPO`` env var.
 
     Args:
         title: Issue title
@@ -1034,20 +1057,26 @@ def create_github_issue(
     """
     import requests
 
-    token = _get_github_token()
-    if not token:
+    if not GATEWAY_URL or not CONSUMER_TOKEN:
         return {
             'success': False,
-            'error': 'GitHub token not available. Set BOOKSTACK_TOKEN and store doctor-github-token in BookStack, or set GITHUB_TOKEN env var.',
+            'error': (
+                'GitHub issue creation requires GATEWAY_URL + CONSUMER_TOKEN. '
+                'Workers must be spawned with gateway mode enabled.'
+            ),
         }
 
-    url = f'https://api.github.com/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}/issues'
-    headers = {
-        'Authorization': f'Bearer {token}',
+    try:
+        from orchestrator_auth import orchestrator_headers
+    except ImportError:
+        from src.orchestrator_auth import orchestrator_headers
+
+    owner, repo = _github_repo()
+    url = f'{GATEWAY_URL}/gateway/github/repos/{owner}/{repo}/issues'
+    headers = orchestrator_headers({
         'Content-Type': 'application/json',
         'Accept': 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-    }
+    })
     payload = {
         'title': title,
         'body': body,
@@ -1057,145 +1086,277 @@ def create_github_issue(
 
     try:
         resp = requests.post(url, headers=headers, json=payload, timeout=15)
-        if resp.status_code == 201:
-            data = resp.json()
+        if resp.status_code in (200, 201):
+            data = resp.json() if resp.content else {}
             return {
                 'success': True,
                 'issue_url': data.get('html_url'),
                 'issue_number': data.get('number'),
             }
-        else:
-            return {
-                'success': False,
-                'error': f'GitHub API returned {resp.status_code}: {resp.text}',
-                'status_code': resp.status_code,
-            }
+        return {
+            'success': False,
+            'error': f'GitHub gateway returned {resp.status_code}: {resp.text}',
+            'status_code': resp.status_code,
+        }
     except Exception as e:
         return {'success': False, 'error': str(e)}
 
 
-# ─── 8. Fix Script Execution ─────────────────────────────────────────────────
+# ─── 8. Fix Execution (orchestrator-mediated remediation) ─────────────────────
+#
+# Workers have NO docker CLI/socket (least-privilege hardening). All docker
+# control routes through the orchestrator's allow-listed, audited remediation
+# API (Task P4b): POST {ORCHESTRATOR_URL}/remediation with
+# {"action": "<name>", "target": "<optional>"} and the worker's CONSUMER_TOKEN.
+#
+# Allowed orchestrator actions (see orchestrator/src/core/remediation.ts):
+#   - restart_container  (target = worker ticketId/name; worker-token OK)
+#   - check_disk_usage   (read-only; worker-token OK)
+#   - cleanup_docker     (requires ADMIN token — worker-token call gets 401)
+#
+# Doctor "fix names" (historically local .ps1/.sh scripts) are mapped to these
+# safe actions. Anything not in the map needs host/infra access the worker must
+# not have, so it is rejected with a clear "escalate to human" result.
 
-# Resolve the fix scripts directory relative to this file
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-FIX_SCRIPTS_DIR = os.path.join(_BASE_DIR, 'scripts', 'doctor-fixes')
+# Map of legacy fix-script names → orchestrator remediation actions.
+_FIX_TO_REMEDIATION = {
+    'restart_container': 'restart_container',
+    'restart_service': 'restart_container',
+    'restart_pm': 'restart_container',
+    'check_disk_usage': 'check_disk_usage',
+    'cleanup_docker': 'cleanup_docker',
+}
 
 
-def run_fix_script(fix_name: str) -> dict:
+def run_fix_script(fix_name: str, target: str = '') -> dict:
     """
-    Execute a self-healing fix script from scripts/doctor-fixes/.
+    Apply a self-healing fix via the orchestrator remediation API.
 
-    The scripts directory is scripts/doctor-fixes/ at the repo root.
-    Only .sh and .ps1 scripts are allowed. Fix names are sanitized.
+    Local script/docker execution is removed: the worker has no docker
+    CLI/socket. Instead, the named fix is mapped to an allow-listed
+    orchestrator remediation action and POSTed to
+    ``{ORCHESTRATOR_URL}/remediation`` with the worker's CONSUMER_TOKEN.
+
+    Fix-name → action mapping:
+        restart_container / restart_service / restart_pm → ``restart_container``
+        check_disk_usage                                 → ``check_disk_usage``
+        cleanup_docker                                   → ``cleanup_docker`` (admin)
+    Unknown/unmapped names (restart_docker, reset_network, increase_memory, …)
+    require host/infra access the worker must not have → escalate to a human.
 
     Args:
-        fix_name: Name of the fix script without extension
-                  e.g. "restart_container" → scripts/doctor-fixes/restart_container.ps1
+        fix_name: Logical fix name (alphanumeric, dash, underscore).
+        target:   Optional container target (ticketId/name) for restart_container.
     Returns:
-        dict with success, stdout, stderr, returncode, available_scripts (if not found)
+        dict with success, output/detail, action (and error on failure).
     """
     # Security: restrict fix_name to safe characters
     if not re.match(r'^[a-zA-Z0-9_-]+$', fix_name):
         return {'success': False, 'error': f'Invalid fix name (only alphanumeric, dash, underscore allowed): {fix_name}'}
 
-    script_paths = [
-        os.path.join(FIX_SCRIPTS_DIR, f'{fix_name}.ps1'),
-        os.path.join(FIX_SCRIPTS_DIR, f'{fix_name}.sh'),
-    ]
-
-    script_path = None
-    for sp in script_paths:
-        if os.path.isfile(sp):
-            script_path = sp
-            break
-
-    if script_path is None:
-        available = []
-        try:
-            if os.path.isdir(FIX_SCRIPTS_DIR):
-                available = sorted(os.listdir(FIX_SCRIPTS_DIR))
-        except Exception:
-            pass
+    action = _FIX_TO_REMEDIATION.get(fix_name)
+    if action is None:
         return {
             'success': False,
-            'error': f'Fix script not found: {fix_name}',
             'fix_name': fix_name,
-            'search_dir': FIX_SCRIPTS_DIR,
-            'available_scripts': available,
+            'error': f'no safe remediation for {fix_name}; escalate to human',
+            'detail': (
+                f'Fix "{fix_name}" needs host/infra access the worker does not '
+                f'have (no docker CLI/socket). Allowed remediations: '
+                f'{sorted(_FIX_TO_REMEDIATION)}. Escalate to a human.'
+            ),
         }
 
-    if script_path.endswith('.ps1'):
-        cmd = ['powershell', '-ExecutionPolicy', 'Bypass', '-File', script_path]
-    else:
-        cmd = ['bash', script_path]
+    if not ORCHESTRATOR_URL or not CONSUMER_TOKEN:
+        return {
+            'success': False,
+            'fix_name': fix_name,
+            'action': action,
+            'error': (
+                'Remediation requires ORCHESTRATOR_URL + CONSUMER_TOKEN. '
+                'Workers must be spawned with gateway mode enabled.'
+            ),
+        }
 
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300,
+        import requests
+        try:
+            from orchestrator_auth import orchestrator_headers
+        except ImportError:
+            from src.orchestrator_auth import orchestrator_headers
+
+        payload = {'action': action}
+        if target:
+            payload['target'] = target
+
+        resp = requests.post(
+            f'{ORCHESTRATOR_URL}/remediation',
+            json=payload,
+            headers=orchestrator_headers({'Content-Type': 'application/json'}),
+            timeout=120,
         )
-        return {
-            'success': result.returncode == 0,
-            'stdout': result.stdout,
-            'stderr': result.stderr,
-            'returncode': result.returncode,
-            'script': script_path,
-        }
-    except subprocess.TimeoutExpired:
-        return {'success': False, 'error': 'Script timed out after 300s', 'script': script_path}
     except Exception as e:
-        return {'success': False, 'error': str(e), 'script': script_path}
+        return {'success': False, 'fix_name': fix_name, 'action': action, 'error': str(e)}
+
+    # cleanup_docker is admin-gated: a worker-token call is rejected by
+    # requireAdmin (401/403). Surface a clear escalate result, do not crash.
+    if resp.status_code in (401, 403):
+        return {
+            'success': False,
+            'fix_name': fix_name,
+            'action': action,
+            'status_code': resp.status_code,
+            'error': (
+                f'{action} requires an admin token (worker token returned '
+                f'{resp.status_code}); escalate to a human / admin to run it.'
+            ),
+        }
+
+    try:
+        data = resp.json() if resp.content else {}
+    except Exception:
+        data = {}
+
+    if resp.status_code == 200 and data.get('ok'):
+        return {
+            'success': True,
+            'fix_name': fix_name,
+            'action': action,
+            'output': data.get('detail', ''),
+            'detail': data.get('detail', ''),
+            'data': data.get('data'),
+        }
+
+    # 400 (unknown action — shouldn't happen given the map), 422 (action
+    # failed), 5xx, or ok:false — surface a clear error.
+    detail = data.get('detail') or data.get('error') or resp.text
+    return {
+        'success': False,
+        'fix_name': fix_name,
+        'action': action,
+        'status_code': resp.status_code,
+        'error': f'Remediation {action} failed (HTTP {resp.status_code}): {detail}',
+        'detail': detail,
+    }
 
 
 # ─── 9. Verify Fix ────────────────────────────────────────────────────────────
 
 def verify_fix(command: str, expected_outcome: str) -> dict:
     """
-    Run a shell command and verify its output contains the expected outcome.
+    Verify a remediation outcome via the orchestrator container relay.
 
-    The expected_outcome is matched as a case-insensitive substring in the
-    combined stdout+stderr output.
+    The worker has no docker CLI/shell, so the previous
+    ``docker ps | grep ...`` verification cannot run. Instead this queries
+    ``GET {ORCHESTRATOR_URL}/containers`` (with the worker's CONSUMER_TOKEN)
+    and confirms the target container is present and running.
+
+    The ``command`` arg is kept for signature/back-compat but is interpreted
+    only as a container hint: ``expected_outcome`` is the container name to
+    confirm. For container verification, pass the target container name as
+    ``expected_outcome``. Non-container verification cannot be performed by the
+    worker and returns a clear "manual verification needed" result.
 
     Args:
-        command: Shell command to execute
-        expected_outcome: Substring expected to appear in the output
+        command: Legacy command string (retained for compatibility; not exec'd).
+        expected_outcome: Container name expected to be present/running.
     Returns:
-        dict with success, actual_output (truncated), matches,
-               expected_outcome, returncode, command
+        dict with success, actual_output, matches, expected_outcome, command.
     """
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except subprocess.TimeoutExpired:
+    target = (expected_outcome or '').strip()
+
+    # Only container-presence verification is supported by the worker.
+    if not target:
         return {
             'success': False,
-            'error': 'Command timed out after 120s',
+            'matches': False,
+            'expected_outcome': expected_outcome,
             'command': command,
+            'error': (
+                'manual verification needed: no container name to confirm. '
+                'verify_fix can only check container presence/state via the '
+                'orchestrator relay.'
+            ),
         }
+
+    if not ORCHESTRATOR_URL or not CONSUMER_TOKEN:
+        return {
+            'success': False,
+            'matches': False,
+            'expected_outcome': expected_outcome,
+            'command': command,
+            'error': (
+                'Container verification requires ORCHESTRATOR_URL + '
+                'CONSUMER_TOKEN. Workers must be spawned with gateway mode.'
+            ),
+        }
+
+    try:
+        import requests as _req
+        try:
+            from orchestrator_auth import orchestrator_headers
+        except ImportError:
+            from src.orchestrator_auth import orchestrator_headers
+
+        resp = _req.get(
+            f'{ORCHESTRATOR_URL}/containers',
+            headers=orchestrator_headers(),
+            timeout=15,
+        )
     except Exception as e:
         return {
             'success': False,
-            'error': str(e),
+            'matches': False,
+            'expected_outcome': expected_outcome,
             'command': command,
+            'error': str(e),
         }
 
-    actual_output = (result.stdout + result.stderr).strip()
-    matches = expected_outcome.lower() in actual_output.lower()
+    if resp.status_code != 200:
+        return {
+            'success': False,
+            'matches': False,
+            'expected_outcome': expected_outcome,
+            'command': command,
+            'status_code': resp.status_code,
+            'error': f'Container relay returned HTTP {resp.status_code}: {resp.text}',
+        }
 
+    try:
+        containers = (resp.json() or {}).get('containers', [])
+    except Exception:
+        containers = []
+
+    target_lc = target.lstrip('/').lower()
+    matched = None
+    for c in containers:
+        name = str(c.get('name', '')).lstrip('/').lower()
+        if not name:
+            continue
+        if name == target_lc or target_lc in name:
+            matched = c
+            break
+
+    if matched is None:
+        return {
+            'success': False,
+            'matches': False,
+            'expected_outcome': expected_outcome,
+            'command': command,
+            'actual_output': f'container "{target}" not found among {len(containers)} containers',
+        }
+
+    state = str(matched.get('state', '')).lower()
+    running = state == 'running'
     return {
-        'success': matches,
-        'actual_output': actual_output[:2000],
-        'matches': matches,
+        'success': running,
+        'matches': running,
         'expected_outcome': expected_outcome,
-        'returncode': result.returncode,
         'command': command,
+        'container': matched.get('name'),
+        'state': matched.get('state'),
+        'status': matched.get('status'),
+        'actual_output': f"{matched.get('name')} state={matched.get('state')} status={matched.get('status')}",
     }
 
 
@@ -1219,33 +1380,17 @@ def _parse_metric_entries(content: str) -> list:
 
 
 def _get_metric_page(metric_name: str) -> dict:
-    """Read existing metric page content and entries from Wiki."""
-    path = f"doctor/metrics/{metric_name.lower().replace(' ', '-')}"
-    query = """
-    query($path: String!) {
-      pages {
-        singleByPath(path: $path) {
-          id
-          content
-        }
-      }
-    }
-    """
-    data = _wiki_request(query, {'path': path})
-    if 'error' in data:
-        return {'content': '', 'entries': []}
-
-    page = data.get('pages', {}).get('singleByPath', {})
-    content = page.get('content', '')
+    """Read existing metric page content and entries from BookStack via gateway."""
+    content = _read_doctor_page_content(f"Metric: {metric_name}")
     return {'content': content, 'entries': _parse_metric_entries(content)}
 
 
 def track_metrics(metric_name: str, value: float) -> dict:
     """
-    Save a metric value to BookStack at /doctor/metrics/.
+    Save a metric value to BookStack (the ``Doctor`` book) via the gateway proxy.
 
-    Metrics are stored as historical JSON entries in a page named after the metric.
-    Up to the last 100 entries are kept.
+    Metrics are stored as a markdown table on a page titled ``Metric: {name}``.
+    Up to the last 100 entries are kept; the page is upserted on each call.
 
     Args:
         metric_name: Name of the metric (e.g., "fix_success_rate", "error_count")
@@ -1254,8 +1399,6 @@ def track_metrics(metric_name: str, value: float) -> dict:
         dict with success, metric_name, value, page_path, entry_count
     """
     timestamp = datetime.now(timezone.utc).isoformat()
-    safe_name = metric_name.lower().replace(' ', '-')
-    path = f"doctor/metrics/{safe_name}"
     title = f"Metric: {metric_name}"
 
     existing = _get_metric_page(metric_name)
@@ -1276,38 +1419,15 @@ def track_metrics(metric_name: str, value: float) -> dict:
 
     content = '\n'.join(content_lines)
 
-    mutation = """
-    mutation($title: String!, $content: String!, $path: String!, $isPublish: Boolean!) {
-      pages {
-        create(
-          title: $title,
-          content: $content,
-          path: $path,
-          isPublish: $isPublish,
-          contentType: "markdown"
-        ) {
-          id
-          path
-        }
-      }
-    }
-    """
-    result = _wiki_request(mutation, {
-        'title': title,
-        'content': content,
-        'path': path,
-        'isPublish': True,
-    })
+    result = _upsert_doctor_page(title, content)
+    if not result.get('success'):
+        return {'success': False, 'error': result.get('error', 'unknown error')}
 
-    if 'error' in result:
-        return {'success': False, 'error': result['error']}
-
-    page = result.get('pages', {}).get('create', {})
     return {
         'success': True,
         'metric_name': metric_name,
         'value': value,
-        'page_path': page.get('path'),
+        'page_path': title,
         'entry_count': len(entries),
     }
 
@@ -1315,24 +1435,8 @@ def track_metrics(metric_name: str, value: float) -> dict:
 # ─── 11. Doctor Dashboard ─────────────────────────────────────────────────────
 
 def _read_fix_outcomes() -> dict:
-    """Read fix success/failure counts from the fix-outcomes Wiki page."""
-    path = 'doctor/metrics/fix-outcomes'
-    query = """
-    query($path: String!) {
-      pages {
-        singleByPath(path: $path) {
-          id
-          content
-        }
-      }
-    }
-    """
-    data = _wiki_request(query, {'path': path})
-    if 'error' in data:
-        return {}
-
-    page = data.get('pages', {}).get('singleByPath', {})
-    content = page.get('content', '')
+    """Read fix success/failure counts from the ``Fix Outcomes`` BookStack page."""
+    content = _read_doctor_page_content('Fix Outcomes')
     return {'content': content}
 
 
@@ -1405,11 +1509,14 @@ def get_doctor_dashboard() -> dict:
 
 def ask_user_confirmation(question: str) -> dict:
     """
-    Send a confirmation question to admin via Matrix/Orchestrator and wait for reply.
+    Send a confirmation question to admin via the orchestrator relay and wait
+    for a reply.
 
-    The question is sent through the orchestrator webhook relay. If the orchestrator
-    is unreachable, falls back to direct Matrix API. Replies are polled for up to
-    600 seconds.
+    The question is posted to ``{ORCHESTRATOR_URL}/webhooks/worker-message``
+    (authenticated by the worker's CONSUMER_TOKEN) and the worker inbox is
+    polled for the admin's reply for up to 600 seconds. There is no direct
+    Matrix path: the orchestrator owns the Matrix bot token, so if the relay is
+    unreachable this returns a clear "could not reach admin" result.
 
     Args:
         question: The yes/no or confirmation question to ask admin
@@ -1421,10 +1528,12 @@ def ask_user_confirmation(question: str) -> dict:
     ticket_id = os.environ.get('TICKET_ID', '')
     question_sent_at_ms = int(time.time() * 1000)
 
-    from orchestrator_auth import orchestrator_headers
+    try:
+        from orchestrator_auth import orchestrator_headers
+    except ImportError:
+        from src.orchestrator_auth import orchestrator_headers
 
-    # Try orchestrator relay first
-    relay_success = False
+    # Post the question through the orchestrator relay.
     try:
         resp = requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/worker-message',
@@ -1438,12 +1547,19 @@ def ask_user_confirmation(question: str) -> dict:
             timeout=10,
         )
         relay_success = resp.status_code == 200
-    except Exception:
-        pass
+    except Exception as e:
+        return {
+            'success': False,
+            'confirmed': None,
+            'error': f'Could not reach admin: orchestrator relay request failed ({e})',
+        }
 
     if not relay_success:
-        # Fallback to direct Matrix
-        return _ask_via_direct_matrix(question)
+        return {
+            'success': False,
+            'confirmed': None,
+            'error': f'Could not reach admin: orchestrator relay returned {resp.status_code}',
+        }
 
     # Poll for admin reply
     start = time.time()
@@ -1490,36 +1606,6 @@ def ask_user_confirmation(question: str) -> dict:
     }
 
 
-def _ask_via_direct_matrix(question: str) -> dict:
-    """Direct Matrix fallback for ask_user_confirmation."""
-    import requests
-
-    if not MATRIX_BOT_TOKEN or not MATRIX_ROOM_ID:
-        return {'success': False, 'confirmed': None, 'error': 'Matrix not configured (no BOT_TOKEN or ROOM_ID)'}
-
-    txn_id = f"doctor_{int(time.time() * 1000)}"
-    try:
-        resp = requests.put(
-            f'{SYNAPSE_API_URL}/_matrix/client/r0/rooms/{MATRIX_ROOM_ID}/send/m.room.message/{txn_id}',
-            headers={
-                'Authorization': f'Bearer {MATRIX_BOT_TOKEN}',
-                'Content-Type': 'application/json',
-            },
-            json={'msgtype': 'm.text', 'body': f'[Doctor Agent] Confirmation needed: {question}'},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            return {'success': False, 'confirmed': None, 'error': f'Matrix send failed: {resp.status_code}'}
-    except Exception as e:
-        return {'success': False, 'confirmed': None, 'error': str(e)}
-
-    return {
-        'success': True,
-        'confirmed': None,
-        'note': 'Message sent via direct Matrix; reply polling unavailable in fallback mode',
-    }
-
-
 # ─── 13. Report Fix Success ───────────────────────────────────────────────────
 
 def report_fix_success(
@@ -1528,7 +1614,8 @@ def report_fix_success(
     classification: str = '',
 ) -> dict:
     """
-    Record a successful fix for metrics tracking and notify admin via Matrix.
+    Record a successful fix for metrics tracking and notify admin via the
+    orchestrator relay.
 
     Args:
         ticket_id: The Plane ticket ID associated with the fix
@@ -1540,7 +1627,6 @@ def report_fix_success(
     import requests
 
     timestamp = datetime.now(timezone.utc).isoformat()
-    path = 'doctor/metrics/fix-outcomes'
     title = 'Fix Outcomes'
 
     fix_data = _read_fix_outcomes()
@@ -1597,32 +1683,14 @@ def report_fix_success(
 
     wiki_content = '\n'.join(content_lines)
 
-    mutation = """
-    mutation($title: String!, $content: String!, $path: String!, $isPublish: Boolean!) {
-      pages {
-        create(
-          title: $title,
-          content: $content,
-          path: $path,
-          isPublish: $isPublish,
-          contentType: "markdown"
-        ) {
-          id
-          path
-        }
-      }
-    }
-    """
-    wiki_result = _wiki_request(mutation, {
-        'title': title,
-        'content': wiki_content,
-        'path': path,
-        'isPublish': True,
-    })
+    wiki_result = _upsert_doctor_page(title, wiki_content)
 
-    # Notify admin via Matrix
+    # Notify admin via the orchestrator relay
     try:
-        from orchestrator_auth import orchestrator_headers
+        try:
+            from orchestrator_auth import orchestrator_headers
+        except ImportError:
+            from src.orchestrator_auth import orchestrator_headers
         requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/worker-message',
             json={
@@ -1646,7 +1714,7 @@ def report_fix_success(
         'ticket_id': ticket_id,
         'fix_applied': fix_applied,
         'classification': classification,
-        'wiki_updated': 'error' not in wiki_result,
+        'wiki_updated': bool(wiki_result.get('success')),
     }
 
 
@@ -1670,7 +1738,6 @@ def report_fix_failure(
     import requests
 
     timestamp = datetime.now(timezone.utc).isoformat()
-    path = 'doctor/metrics/fix-outcomes'
     title = 'Fix Outcomes'
 
     fix_data = _read_fix_outcomes()
@@ -1725,32 +1792,14 @@ def report_fix_failure(
 
     wiki_content = '\n'.join(content_lines)
 
-    mutation = """
-    mutation($title: String!, $content: String!, $path: String!, $isPublish: Boolean!) {
-      pages {
-        create(
-          title: $title,
-          content: $content,
-          path: $path,
-          isPublish: $isPublish,
-          contentType: "markdown"
-        ) {
-          id
-          path
-        }
-      }
-    }
-    """
-    wiki_result = _wiki_request(mutation, {
-        'title': title,
-        'content': wiki_content,
-        'path': path,
-        'isPublish': True,
-    })
+    wiki_result = _upsert_doctor_page(title, wiki_content)
 
-    # Notify admin
+    # Notify admin via the orchestrator relay
     try:
-        from orchestrator_auth import orchestrator_headers
+        try:
+            from orchestrator_auth import orchestrator_headers
+        except ImportError:
+            from src.orchestrator_auth import orchestrator_headers
         requests.post(
             f'{ORCHESTRATOR_URL}/webhooks/worker-message',
             json={
@@ -1774,7 +1823,7 @@ def report_fix_failure(
         'ticket_id': ticket_id,
         'diagnosis': diagnosis,
         'reason': reason,
-        'wiki_updated': 'error' not in wiki_result,
+        'wiki_updated': bool(wiki_result.get('success')),
     }
 
 
@@ -2164,22 +2213,25 @@ def run_self_healing_pipeline(error_description: str, container_name: str = '') 
     result['suggestions'] = suggestions
 
     if not result['known_issue_found']:
-        # Try the top recommended fix script
+        # Try the top recommended fix via the orchestrator remediation API.
         if suggestions:
             top_fix = suggestions[0]
-            fix_result = run_fix_script(top_fix['fix_name'])
+            fix_result = run_fix_script(top_fix['fix_name'], target=primary_container)
             if fix_result.get('success'):
-                result['fix_attempted'] = f"R script: {top_fix['fix_name']} ({top_fix['reason']})"
+                result['fix_attempted'] = f"remediation: {top_fix['fix_name']} ({top_fix['reason']})"
                 result['fix_success'] = True
-                # Verify
+                # Verify via the orchestrator container relay (no shell/docker).
                 if primary_container:
                     verify_result = verify_fix(
-                        f"docker ps | grep {primary_container}",
+                        f"confirm container {primary_container} running",
                         primary_container,
                     )
                     result['fix_success'] = verify_result.get('success', False)
             else:
-                result['fix_attempted'] = f"R script {top_fix['fix_name']} failed: {fix_result.get('error', 'unknown')}"
+                result['fix_attempted'] = (
+                    f"remediation {top_fix['fix_name']} failed: "
+                    f"{fix_result.get('error', 'unknown')}"
+                )
 
     # ── STEP 5: Track Metrics ─────────────────────────────────────────────
     result['step'] = 'track'
@@ -2261,88 +2313,29 @@ def create_dynamic_fix_script(
     language: str = "powershell",
 ) -> dict:
     """
-    Create a new self-healing fix script on-the-fly when no existing script fits.
+    DISABLED for safety.
 
-    The script is saved to scripts/doctor-fixes/{fix_name}.ps1 (or .sh).
-    Syntax is verified before saving.
+    This used to write an LLM-generated .ps1/.sh into scripts/doctor-fixes/ and
+    later execute it locally. That local write+exec path is unsafe and now has
+    no consumer: run_fix_script no longer runs local scripts — all docker
+    control goes through the orchestrator's allow-listed remediation API.
 
-    Args:
-        fix_name: Unique name for the fix (e.g. "fix_nginx_502")
-        target_issue: Natural-language description of what this fix addresses
-        code_content: The script content to write
-        language: "powershell" (default) or "bash"
+    The function is kept (so tool registration / callers don't break) but is
+    inert: it writes NO file and executes NOTHING. Use the allow-listed
+    remediation API (run_fix_script) or escalate to a human.
+
     Returns:
-        dict with success, script_path, fix_name, syntax_verified
+        dict with success=False, disabled=True, message.
     """
-    # Sanitize fix_name
-    if not re.match(r'^[a-zA-Z0-9_-]+$', fix_name):
-        return {'success': False, 'error': 'fix_name: alphanumeric, dash, underscore only'}
-
-    # Determine extension
-    ext = '.ps1' if language == 'powershell' else '.sh'
-    script_path = os.path.join(FIX_SCRIPTS_DIR, f'{fix_name}{ext}')
-
-    # Verify syntax (PowerShell)
-    if language == 'powershell':
-        syntax_ok = _verify_powershell_syntax(code_content)
-    else:
-        syntax_ok = _verify_bash_syntax(code_content)
-
-    if not syntax_ok.get('valid'):
-        return {
-            'success': False,
-            'error': f"Syntax error: {syntax_ok.get('error', 'unknown')}",
-            'fix_name': fix_name,
-        }
-
-    # Write script
-    try:
-        os.makedirs(FIX_SCRIPTS_DIR, exist_ok=True)
-        with open(script_path, 'w', encoding='utf-8') as f:
-            f.write(code_content)
-        return {
-            'success': True,
-            'script_path': script_path,
-            'fix_name': fix_name,
-            'syntax_verified': True,
-            'target_issue': target_issue,
-        }
-    except Exception as e:
-        return {'success': False, 'error': str(e)}
-
-
-def _verify_powershell_syntax(code: str) -> dict:
-    """Verify PowerShell script syntax without executing."""
-    try:
-        result = subprocess.run(
-            ['powershell', '-NoProfile', '-Command',
-             f'$script = @"\n{code}\n"@; $null = [System.Management.Automation.Language.Parser]::ParseInput($script, [ref]$null, [ref]$null)'],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            return {'valid': True}
-        return {'valid': False, 'error': result.stderr[:300]}
-    except Exception as e:
-        return {'valid': False, 'error': str(e)}
-
-
-def _verify_bash_syntax(code: str) -> dict:
-    """Verify Bash script syntax without executing."""
-    try:
-        result = subprocess.run(
-            ['bash', '-n'],
-            input=code,
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        if result.returncode == 0:
-            return {'valid': True}
-        return {'valid': False, 'error': result.stderr[:300]}
-    except Exception as e:
-        return {'valid': False, 'error': str(e)}
+    return {
+        'success': False,
+        'disabled': True,
+        'fix_name': fix_name,
+        'message': (
+            'Dynamic fix-script creation is disabled for safety. Use the '
+            'allow-listed remediation API or escalate to a human.'
+        ),
+    }
 
 
 # ─── 19. Config File Patcher ──────────────────────────────────────────────────
@@ -2370,20 +2363,74 @@ def patch_config_file(
       - synapse/homeserver.yaml → YAML structure
 
     Args:
-        file_path: Path to config file (relative to repo root or absolute)
-        operation: set | append | remove | reset
+        file_path: Config file path, RELATIVE to /workspace only. Absolute
+                   paths and `..` traversal are rejected.
+        operation: set | remove | reset (``append`` is NOT supported)
         key: For .env files: the key name; For others: top-level key or dot-path
         value: The value to set (for "set" operation)
         path: For YAML/JSON: dot-notation path (e.g. "services.orchestrator.restart")
     Returns:
         dict with success, file_path, operation, key, previous_value
+
+    GATING (Task P4d):
+      * Opt-in: returns disabled unless env DOCTOR_ALLOW_CONFIG_PATCH == 'true'.
+      * Containment: rejects absolute paths and any path that resolves outside
+        /workspace (`..` traversal). The worker only has /workspace mounted, so
+        the real repo/compose/.env files are NOT reachable from here regardless.
+      * The unsupported ``append`` op returns a clear error (never silently
+        no-ops).
     """
-    # Resolve path
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    abs_path = file_path if os.path.isabs(file_path) else os.path.join(repo_root, file_path)
+    # ── Gate 1: explicit opt-in ──────────────────────────────────────────
+    if os.environ.get('DOCTOR_ALLOW_CONFIG_PATCH') != 'true':
+        return {
+            'success': False,
+            'disabled': True,
+            'needs_confirmation': True,
+            'message': (
+                'patch_config_file is disabled. Set DOCTOR_ALLOW_CONFIG_PATCH=true '
+                'to opt in. NOTE: the worker only has /workspace mounted, so the '
+                'real repo/compose/.env files are not patchable from here — '
+                'escalate config changes to a human / DevOps.'
+            ),
+        }
+
+    # ── Gate 2: reject unsupported ops up front (no silent no-op) ─────────
+    if operation not in ('set', 'remove', 'reset'):
+        return {
+            'success': False,
+            'error': (
+                f'Unsupported operation: {operation}. Allowed: set | remove | reset. '
+                f'(append is intentionally not implemented.)'
+            ),
+        }
+
+    # ── Gate 3: path containment — workspace-relative only ────────────────
+    if os.path.isabs(file_path) or file_path.startswith(('/', '\\')):
+        return {
+            'success': False,
+            'error': f'Absolute paths are rejected; file_path must be relative to /workspace: {file_path}',
+        }
+
+    try:
+        from .local_exec import _resolve_workspace_path
+    except ImportError:
+        try:
+            from tools.local_exec import _resolve_workspace_path
+        except ImportError:
+            from src.tools.local_exec import _resolve_workspace_path
+
+    try:
+        resolved = _resolve_workspace_path(file_path)
+    except PermissionError:
+        return {
+            'success': False,
+            'error': f'Path escapes /workspace (traversal/`..` not allowed): {file_path}',
+        }
+
+    abs_path = str(resolved)
 
     if not os.path.exists(abs_path):
-        return {'success': False, 'error': f'File not found: {abs_path}'}
+        return {'success': False, 'error': f'File not found within /workspace: {abs_path}'}
 
     try:
         ext = os.path.splitext(abs_path)[1].lower()
@@ -2610,13 +2657,17 @@ def invoke_worker_tool(
 
 def run_full_remediation(error_description: str, container_name: str = '') -> dict:
     """
-    Full auto-remediation that tries ALL approaches in order:
+    Full auto-remediation that tries the safe approaches in order:
     1. Known issues DB
-    2. Existing fix scripts
-    3. Dynamic fix script creation
-    4. Config file patching
-    5. Cross-worker tool invocation
-    6. Escalation with GitHub issue
+    2. Allow-listed remediation via the orchestrator API (run_fix_script)
+    3. Cross-worker tool invocation
+    4. Escalation with GitHub issue
+
+    Dynamic fix-script creation and local config patching are intentionally
+    NOT in this chain: create_dynamic_fix_script is disabled (local script
+    write+exec is unsafe and the worker has no docker), and config patching is
+    gated/limited to /workspace (real repo files aren't reachable). Anything
+    those would have handled is escalated to a human via a GitHub issue.
 
     Args:
         error_description: Natural-language error description
@@ -2662,82 +2713,44 @@ def run_full_remediation(error_description: str, container_name: str = '') -> di
             result['fix_success'] = True
             return result
 
-    # STEP B: Existing fix scripts
-    result['step'] = 'try_existing_scripts'
+    # STEP B: Allow-listed remediation via the orchestrator API.
+    # run_fix_script maps the suggested fix name to a safe remediation action
+    # (restart_container / check_disk_usage / cleanup_docker) and POSTs it to
+    # {ORCHESTRATOR_URL}/remediation. Unmapped names short-circuit with a clear
+    # "escalate to human" result (no HTTP, no local exec).
+    result['step'] = 'try_remediation'
     suggestions = _suggest_fixes(primary_error, primary_container)
     for sug in suggestions[:3]:
-        fix_result = run_fix_script(sug['fix_name'])
+        fix_result = run_fix_script(sug['fix_name'], target=primary_container)
         result['actions_tried'].append({
             'action': f'run_fix_script({sug["fix_name"]})',
             'reason': sug['reason'],
             'success': fix_result.get('success', False),
+            'detail': fix_result.get('error') or fix_result.get('detail'),
         })
         if fix_result.get('success'):
-            result['fix_success'] = True
-            result['diagnosis'] = f"Fix script {sug['fix_name']} succeeded"
-            return result
+            # Verify via the orchestrator container relay (no shell/docker).
+            verified = True
+            if primary_container:
+                verify_result = verify_fix(
+                    f"confirm container {primary_container} running",
+                    primary_container,
+                )
+                verified = verify_result.get('success', False)
+                result['actions_tried'].append({
+                    'action': f'verify_fix({primary_container})',
+                    'success': verified,
+                })
+            if verified:
+                result['fix_success'] = True
+                result['diagnosis'] = f"Remediation {sug['fix_name']} succeeded"
+                return result
 
-    # STEP C: Dynamic script creation (if no existing script worked)
-    result['step'] = 'create_dynamic_script'
-    script_name = f"auto_{int(time.time())}"
-    # Generate a simple fix script based on error type
-    if 'connection refused' in primary_error.lower():
-        script_code = f"""# Auto-generated fix for: {primary_error[:80]}
-docker restart {primary_container or 'all'}
-exit 0
-"""
-    elif 'oom' in primary_error.lower() or 'memory' in primary_error.lower():
-        script_code = f"""# Auto-generated fix for: {primary_error[:80]}
-docker compose -f docker-compose.yml down
-docker compose -f docker-compose.yml up -d
-exit 0
-"""
-    elif 'disk full' in primary_error.lower() or 'no space' in primary_error.lower():
-        script_code = """# Auto-generated fix for disk space issue
-docker system prune -af --volumes
-exit 0
-"""
-    else:
-        script_code = f"""# Auto-generated fix for: {primary_error[:80]}
-docker restart {primary_container or 'all'}
-exit 0
-"""
-
-    dyn_result = create_dynamic_fix_script(
-        fix_name=script_name,
-        target_issue=primary_error[:200],
-        code_content=script_code,
-        language='powershell',
-    )
-    result['actions_tried'].append({
-        'action': f'create_dynamic_fix_script({script_name})',
-        'success': dyn_result.get('success', False),
-    })
-    if dyn_result.get('success'):
-        result['scripts_created'].append(script_name)
-        fix_result = run_fix_script(script_name)
-        result['actions_tried'].append({
-            'action': f'run_fix_script({script_name})',
-            'success': fix_result.get('success', False),
-        })
-        if fix_result.get('success'):
-            result['fix_success'] = True
-            result['diagnosis'] = f"Dynamic script {script_name} succeeded"
-            return result
-
-    # STEP D: Config file patching
-    result['step'] = 'patch_config'
-    config_tried = []
-    if 'port already in use' in primary_error.lower() or 'bind' in primary_error.lower():
-        patch_result = patch_config_file(
-            file_path='docker-compose.override.yml',
-            operation='append',
-            value=f'# Auto-patch: {primary_error[:80]}',
-        )
-        config_tried.append({'file': 'docker-compose.override.yml', **patch_result})
-
-    result['config_changes'] = config_tried
-    result['actions_tried'].extend([{'action': f'patch_config({c["file"]})', 'success': c.get('success', False)} for c in config_tried])
+    # NOTE: dynamic fix-script creation (old STEP C) and local config patching
+    # (old STEP D) are intentionally removed. create_dynamic_fix_script is
+    # disabled (unsafe local write+exec, worker has no docker) and config
+    # patching is gated/limited to /workspace where real repo files aren't
+    # reachable. Anything those would have addressed falls through to escalation.
 
     # STEP E: Cross-worker invocation
     result['step'] = 'cross_worker'
@@ -2766,9 +2779,6 @@ exit 0
 
 ## Actions Tried (all failed)
 {chr(10).join([f"- {a['action']}: {'✅' if a.get('success') else '❌'}" for a in result['actions_tried']])}
-
-## Config Changes
-{chr(10).join([f"- {c['file']}: {'✅' if c.get('success') else '❌'}" for c in config_tried]) if config_tried else "None"}
 
 ## Cross-Worker Calls
 {chr(10).join([f"- {k}: {'✅' if v.get('success') else '❌'}" for k, v in enumerate(result['cross_worker_calls'])]) if result['cross_worker_calls'] else "None"}

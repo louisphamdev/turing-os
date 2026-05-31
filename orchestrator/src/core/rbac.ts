@@ -40,6 +40,9 @@ export type Permission =
   | 'github:write'
   | 'github:repo'
   | 'github:*'
+  // Remediation permissions (orchestrator-mediated docker control, P4b).
+  // Only the doctor role gets this; it gates the POST /remediation endpoint.
+  | 'remediation:execute'
   // Admin permissions
   | '*';
 
@@ -112,7 +115,14 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     'llm:read',
     'plane:read', 'plane:write',
     'bookstack:*',
-    'github:read',
+    // Doctor files incident issues via the gateway (create_github_issue is a
+    // POST = write), so it needs github:write in addition to github:read.
+    'github:read', 'github:write',
+    // P4b: Doctor (and ONLY Doctor) may call the orchestrator-mediated
+    // remediation API (restart a worker container, read disk usage, prune
+    // dangling docker resources). The orchestrator owns the docker socket;
+    // the worker never does. This permission gates POST /remediation.
+    'remediation:execute',
   ],
 };
 
@@ -243,6 +253,7 @@ export class RBACService {
       'bookstack:read', 'bookstack:write', 'bookstack:*',
       'matrix:read', 'matrix:write', 'matrix:*',
       'github:read', 'github:write', 'github:repo', 'github:*',
+      'remediation:execute',
       '*',
     ];
 

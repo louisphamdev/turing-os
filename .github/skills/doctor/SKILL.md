@@ -6,9 +6,15 @@ description: **SKILL** — Doctor Agent diagnostic & self-healing toolkit for Tu
 # Doctor Agent Skill — Diagnostic & Self-Healing Toolkit
 
 > Doctor is the system-doctor agent: it diagnoses failures, attempts self-healing,
-> escalates, and records incidents. Fix-execution (running fix scripts, config
-> patching, dynamic script generation) is **experimental** — diagnosis and
-> escalation are the reliable paths.
+> escalates, and records incidents. Fix-execution is **orchestrator-mediated**:
+> `run_fix_script()` maps a fix name onto an allow-listed action and `POST`s it to
+> `{ORCHESTRATOR_URL}/remediation` (the orchestrator runs it via Dockerode with
+> audit + RBAC). The worker has no Docker socket and runs no local scripts.
+> Knowledge base / metrics / GitHub escalation route through the gateway
+> (`/gateway/bookstack`, `/gateway/github`) with `CONSUMER_TOKEN`. Dynamic
+> fix-script creation is **disabled** and arbitrary config patching is **gated**
+> for safety. These paths are implemented and unit-tested but **pending
+> live-stack verification**.
 
 ## Core Philosophy
 
@@ -77,12 +83,17 @@ TOOL_CALL: create_github_issue
 ARGUMENTS: {"title": "[Bug] Worker OOM on large file upload", "body": "## Error Summary\n...", "labels": ["project-bug", "severity-p1"]}
 ```
 
-### 8. `run_fix_script(fix_name)` 🔧
-Execute a self-healing script from `scripts/doctor-fixes/`. Supports `.ps1` and `.sh`.
+### 8. `run_fix_script(fix_name, target)` 🔧
+Map a fix name onto an allow-listed remediation action and `POST` it to
+`{ORCHESTRATOR_URL}/remediation` (CONSUMER_TOKEN). The orchestrator runs the
+action via Dockerode with audit + RBAC. The worker runs **no** local scripts.
+Mappings: `restart_container` / `restart_service` / `restart_pm` → `restart_container`;
+`check_disk_usage` → `check_disk_usage`; `cleanup_docker` → `cleanup_docker` (admin).
+Unmapped names short-circuit with a clear message.
 
 ```python
 TOOL_CALL: run_fix_script
-ARGUMENTS: {"fix_name": "restart_container"}
+ARGUMENTS: {"fix_name": "restart_container", "target": "ticket-42"}
 ```
 
 ### 9. `verify_fix(command, expected_outcome)`
@@ -128,36 +139,29 @@ ARGUMENTS: {"error_description": "Container turing-orchestrator keeps restarting
 ```
 
 ### 14. `run_full_remediation(error_description, container_name)` 🚀
-**FULL auto-remediation** — tries ALL approaches in sequence:
-1. Known Issues DB → 2. Existing fix scripts → 3. Dynamic script creation → 4. Config patching → 5. Cross-worker tools → 6. GitHub escalation
+**Auto-remediation** — tries approaches in sequence:
+1. Known Issues DB → 2. Allow-listed remediation (`run_fix_script` → `POST /remediation`) → 3. Cross-worker tools → 4. GitHub escalation (via `/gateway/github`).
+Dynamic-script creation and arbitrary config patching are NOT in this chain
+(disabled / gated for safety — escalate instead).
 
 ```python
 TOOL_CALL: run_full_remediation
 ARGUMENTS: {"error_description": "Container keeps crashing", "container_name": "turing-orchestrator"}
 ```
 
-### 15. `create_dynamic_fix_script(fix_name, target_issue, code_content, language)` 🔨
-**Create a new fix script on-the-fly** when no existing script fits the error.
-Syntax is verified before saving. Script is saved to `scripts/doctor-fixes/`.
+### 15. `create_dynamic_fix_script(...)` 🔨 — DISABLED
+**Disabled for safety.** This used to write an LLM-generated `.ps1`/`.sh` into
+`scripts/doctor-fixes/` and execute it locally; that write+exec path is unsafe
+and now has no consumer (`run_fix_script` no longer runs local scripts). The
+function is inert (returns `{ disabled: true }`). When no allow-listed action
+fits, **escalate to a human** via `create_github_issue`.
 
-```python
-TOOL_CALL: create_dynamic_fix_script
-ARGUMENTS: {"fix_name": "fix_nginx_502", "target_issue": "nginx 502 error", "code_content": "docker compose restart nginx"}
-```
-
-### 16. `patch_config_file(file_path, operation, key, value, path)` ⚙️
-**Patch config files in-place**: `.env`, `docker-compose.yml`, `.json`, `.yaml`.
-Supports `set`, `append`, `remove`, `reset` operations. No restart needed.
-
-```python
-# Patch .env
-TOOL_CALL: patch_config_file
-ARGUMENTS: {"file_path": ".env", "operation": "set", "key": "WORKER_MEMORY_LIMIT", "value": "1g"}
-
-# Patch YAML (dot-path notation)
-TOOL_CALL: patch_config_file
-ARGUMENTS: {"file_path": "docker-compose.override.yml", "operation": "set", "path": "services.orchestrator.restart", "value": "on-failure:3"}
-```
+### 16. `patch_config_file(file_path, operation, key, value, path)` ⚙️ — GATED
+**Off by default.** Returns disabled unless `DOCTOR_ALLOW_CONFIG_PATCH=true`, and
+even then it is **workspace-only** (absolute paths and `..` traversal rejected;
+the worker only mounts `/workspace`, so the host repo/compose/`.env` are not
+reachable). Escalate host config changes to a human / DevOps. Operations:
+`set`, `remove`, `reset` (`append` is rejected).
 
 ### 17. `invoke_worker_tool(target_role, tool_name, arguments)` 🌐
 **Call a tool from another worker role** via orchestrator relay.
@@ -245,13 +249,13 @@ STEP 3: CHECK KNOWLEDGE BASE
   - If found: apply known fix, skip to VERIFY
   - If new: proceed to ATTEMPT FIX
 
-STEP 4: ATTEMPT FIX
-  - Run the appropriate fix script via run_fix_script()
-  - If no script exists: attempt intelligent remediation
-    • "connection refused" → restart the service
-    • "OOM killed" → suggest memory limit increase
-    • "port already in use" → find and kill the conflicting process
-    • "disk full" → clean up old Docker resources
+STEP 4: ATTEMPT FIX (orchestrator-mediated)
+  - run_fix_script() maps the fix name onto an allow-listed action and
+    POSTs it to {ORCHESTRATOR_URL}/remediation (no local script):
+    • "connection refused" / crash → restart_container (worker containers only)
+    • "OOM killed" → ask admin → restart_container / cleanup_docker [admin]
+    • "disk full" → check_disk_usage, then cleanup_docker [admin]
+  - Unmapped fix names short-circuit with a clear message (no local exec)
 
 STEP 5: VERIFY
   - verify_fix() — confirm the fix worked
@@ -270,33 +274,31 @@ STEP 7: REPORT
 
 ## Advanced Remediation: `run_full_remediation()`
 
-For complex or stubborn errors, use `run_full_remediation()` which tries **all approaches**:
+For complex or stubborn errors, use `run_full_remediation()` which tries the
+available approaches in sequence:
 
 ```
-APPROACH 1: Known Issues DB
+APPROACH 1: Known Issues DB (gateway BookStack)
   → If match found: apply known fix, done
 
-APPROACH 2: Existing Fix Scripts (top 3)
+APPROACH 2: Allow-listed remediation
+  → run_fix_script() → POST {ORCHESTRATOR_URL}/remediation
+  → restart_container / check_disk_usage / cleanup_docker [admin]
   → If one works: done
 
-APPROACH 3: Dynamic Script Creation
-  → Generate new .ps1 based on error type
-  → Verify syntax → save → run
-  → If works: save to known-issues DB
-
-APPROACH 4: Config Patching
-  → Patch .env / docker-compose.yml / .json / .yaml
-  → No restart needed
-
-APPROACH 5: Cross-Worker Invocation
+APPROACH 3: Cross-Worker Invocation (orchestrator relay)
   → Call devops.scale_worker for scaling issues
   → Call qa.run_tests for regression check
   → Call se.read_code for code-level diagnosis
 
-APPROACH 6: Full GitHub Escalation
+APPROACH 4: Full GitHub Escalation (via /gateway/github)
   → Create issue with all actions tried
   → All failed approaches documented
   → Pre-filled, labeled, ready to submit
+
+NOT in this chain (disabled / gated for safety):
+  ✗ Dynamic .ps1/.sh script creation (no local write+exec)
+  ✗ Arbitrary config patching (workspace-only, off by default)
 ```
 
 ## Container Discovery Architecture 🔍
@@ -344,17 +346,21 @@ Doctor can inspect ALL containers in the system — both workers AND infrastruct
 
 ---
 
-## Fix Script Directory
+## Remediation Actions (orchestrator-mediated)
 
-```
-scripts/doctor-fixes/
-├── restart_container.ps1     # Restart a specific container
-├── cleanup_docker.ps1        # Clean up dangling volumes/networks
-├── increase_memory.ps1        # Increase container memory limit
-├── restart_service.ps1       # Restart a Docker Compose service
-├── check_disk_usage.ps1      # Report disk usage and cleanup targets
-└── reset_network.ps1         # Reset Docker networking
-```
+The Doctor worker has **no Docker socket** and runs **no local scripts** (the old
+`scripts/doctor-fixes/*.ps1` files were removed). `run_fix_script()` maps a fix
+name onto one of the orchestrator's allow-listed actions and `POST`s it to
+`{ORCHESTRATOR_URL}/remediation`:
+
+| Action | Notes |
+|--------|-------|
+| `restart_container` | Restart a worker container (`turing-worker=true` only); worker token OK |
+| `check_disk_usage` | Read-only `docker system df`; worker token OK |
+| `cleanup_docker` | Prune dangling images/volumes + unused networks; requires `ADMIN_API_TOKEN` |
+
+Unknown actions are rejected (HTTP 400). Every call is audited (`remediation:execute`,
+doctor role only).
 
 ---
 
@@ -441,12 +447,15 @@ Doctor uses these labels for systematic bug tracking:
 
 Doctor has built-in intelligent responses for common error patterns:
 
+All fix actions go through `run_fix_script()` → an allow-listed orchestrator
+remediation action (`restart_container` / `check_disk_usage` / `cleanup_docker`).
+
 | Error Pattern | Auto-Detected Cause | Auto-Remediation |
 |---|---|---|
-| `connection refused` | Service not running | `run_fix_script("restart_service")` |
-| `OOM killed` | Memory limit exceeded | `ask_user_confirmation` → increase limit |
-| `port already in use` | Port conflict | Kill process using that port |
-| `disk full` | No space left | `run_fix_script("cleanup_docker")` |
+| `connection refused` | Service not running | `run_fix_script("restart_container")` |
+| `OOM killed` | Memory limit exceeded | `ask_user_confirmation` → `cleanup_docker` [admin] / `restart_container` |
+| `port already in use` | Port conflict | Diagnose + escalate (no kill-process action) |
+| `disk full` | No space left | `run_fix_script("check_disk_usage")` → `cleanup_docker` [admin] |
 | `certificate expired` | SSL cert needs renew | Notify admin with renewal steps |
 | `rate limit exceeded` | API throttling | Wait 60s, retry with backoff |
 | `404 not found` | Wrong URL or service down | Check connectivity, update endpoint |
@@ -487,5 +496,5 @@ Each known issue in BookStack follows this structure:
 |------|---------|
 | `base-worker/src/tools/doctor_tools.py` | All Doctor tools |
 | `roles/doctor.md` | Doctor role definition |
-| `scripts/doctor-fixes/` | Self-healing fix scripts |
+| `orchestrator/src/core/remediation.ts` | Allow-listed remediation actions (orchestrator-side) |
 | `bookstack_data/doctor/` | BookStack pages (known-issues, metrics) |

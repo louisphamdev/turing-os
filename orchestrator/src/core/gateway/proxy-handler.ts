@@ -15,6 +15,7 @@ import { LLMProxy } from './llm-proxy';
 import { PlaneProxy } from './plane-proxy';
 import { BookStackProxy } from './bookstack-proxy';
 import { MatrixProxy } from './matrix-proxy';
+import { GithubProxy } from './github-proxy';
 import { incGatewayRequest, incGatewayError, statusClassOf } from '../metrics';
 import { logger } from '../logger';
 
@@ -35,12 +36,14 @@ export class ProxyHandler {
   private planeProxy: PlaneProxy;
   private bookstackProxy: BookStackProxy;
   private matrixProxy: MatrixProxy;
+  private githubProxy: GithubProxy;
 
   constructor() {
     this.llmProxy = new LLMProxy(this.vault, this.auditLogger);
     this.planeProxy = new PlaneProxy(this.vault, this.auditLogger);
     this.bookstackProxy = new BookStackProxy(this.vault, this.auditLogger);
     this.matrixProxy = new MatrixProxy(this.vault, this.auditLogger);
+    this.githubProxy = new GithubProxy(this.vault, this.auditLogger);
   }
 
   /**
@@ -59,7 +62,7 @@ export class ProxyHandler {
       return;
     }
 
-    const service = pathParts[1] as 'llm' | 'plane' | 'bookstack' | 'matrix' | 'health';
+    const service = pathParts[1] as 'llm' | 'plane' | 'bookstack' | 'matrix' | 'github' | 'health';
     
     // Health check endpoint
     if (service === 'health') {
@@ -153,6 +156,15 @@ export class ProxyHandler {
           break;
         case 'matrix':
           result = await this.matrixProxy.proxy(validation.payload, endpoint, method, req.body, req.headers);
+          break;
+        case 'github':
+          result = await this.githubProxy.proxy(
+            validation.payload,
+            endpoint,
+            method,
+            req.body,
+            req.query as Record<string, any>,
+          );
           break;
         default:
           res.status(400).json({ error: `Unknown service: ${service}` });

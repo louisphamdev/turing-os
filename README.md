@@ -60,7 +60,7 @@ Stakeholder ──► [PO] ──► [PM] ──► [HR] ──► [Workers]
 ### 5. Doctor Agent — System Diagnostics & Self-Healing (NEW)
 Doctor is Turing OS's **system doctor** — a specialized worker that runs 24/7, diagnoses failures, and reports on the health of the system. It is a key differentiator of Turing OS.
 
-> 🧪 **Experimental** — Diagnostics are functional today: health checks, log parsing, service-connectivity probes, and container discovery (via the orchestrator relay) all work. Automated **fix execution** is a 🗺️ roadmap item: in the shipped Linux worker image the fix scripts are PowerShell-only (`.ps1`, not present/COPYed), there is no Docker CLI/socket inside the container, the known-issues lookup targets a BookStack endpoint that does not exist, and credentials are not yet injected. The diagram below describes the intended closed loop, not all of which executes in the current Linux image.
+> 🧪 **Implemented via gateway + orchestrator remediation; pending live-stack verification** — Diagnostics (health checks, log parsing, service-connectivity probes, container discovery via the orchestrator relay) are functional. Knowledge base / metrics / dashboard go through the **gateway BookStack REST proxy** (`/gateway/bookstack`, `CONSUMER_TOKEN`), GitHub escalation through the **`/gateway/github` proxy**, and admin confirmation through the **orchestrator Matrix relay** (`/webhooks/worker-message`) — no raw tokens in the worker. **Fix execution** is now **orchestrator-mediated**: Doctor calls `POST /remediation` on the orchestrator, which performs an allow-listed action via Dockerode with audit + RBAC (`remediation:execute`, doctor role only). The worker has no Docker socket and runs no local scripts. These paths are implemented and unit-tested but **not yet verified against a live stack** (real BookStack page round-trips, real GitHub issue creation, real container restarts).
 
 #### What Doctor Does
 
@@ -69,26 +69,22 @@ Error detected ──► Doctor triages ──► Diagnoses root cause
                                               │
                     ┌─────────────────────────┼────────────────────────────┐
                     ▼                         ▼                            ▼
-         Known Issues DB              Fix Scripts (6 built-in)    Dynamic Tool Creation
-         (BookStack)                    restart_service              create new .ps1 on-the-fly
-                                       cleanup_docker
-                                       restart_container
-                                       check_disk_usage
-                                       reset_network
-                                       restart_docker
+         Known Issues DB         Orchestrator remediation      Cross-Worker invocation
+         (gateway BookStack)      POST /remediation:           devops.scale_worker
+                                   restart_container            qa.run_tests
+                                   check_disk_usage             se.analyze_code
+                                   cleanup_docker [admin]
                     │                         │                            │
                     └─────────────────────────┼────────────────────────────┘
                                               ▼
-                                    Config Patching (.env, YAML, JSON)
+                          (dynamic-script creation & arbitrary config patching
+                           are DISABLED / gated for safety — see below)
                                               │
-                    ┌─────────────────────────┼────────────────────────────┐
-                    ▼                         ▼                            ▼
-              Cross-Worker           GitHub Issue                  Human Escalation
-           devops.scale_worker     (fully documented)             (via Matrix)
-           qa.run_tests
-           se.analyze_code
+                    ┌─────────────────────────┴────────────────────────────┐
+                    ▼                                                       ▼
+              GitHub Issue (via /gateway/github proxy)            Human Escalation (Matrix relay)
                                               │
-                                    System restored ──► Learns & tracks
+                                    System restored ──► Learns & tracks (gateway BookStack)
 ```
 
 #### Doctor Tool Suite (21 tools)
@@ -101,16 +97,16 @@ Error detected ──► Doctor triages ──► Diagnoses root cause
 | `check_recent_errors()` | Aggregate ERROR/WARN across ALL containers |
 | `query_known_issues_db()` | Search BookStack for past errors & fixes |
 | `save_to_known_issues()` | Record new learnings to BookStack |
-| `create_github_issue()` | Structured GitHub issues with labels |
-| `run_fix_script()` | Execute scripts from `scripts/doctor-fixes/` |
+| `create_github_issue()` | Structured GitHub issues via the `/gateway/github` proxy (no raw token in worker) |
+| `run_fix_script()` | Map a fix name to an allow-listed action and `POST /remediation` on the orchestrator |
 | `verify_fix()` | Confirm a fix worked |
-| `track_metrics()` | Record success/failure rates to BookStack |
+| `track_metrics()` | Record success/failure rates to BookStack (via `/gateway/bookstack`) |
 | `get_doctor_dashboard()` | Full system summary |
-| `ask_user_confirmation()` | Yes/no questions to admin via Matrix |
-| `run_self_healing_pipeline()` | Full diagnose→fix→track workflow (🧪 fix steps experimental — see note above) |
-| `run_full_remediation()` | Full auto-remediation trying ALL approaches |
-| `create_dynamic_fix_script()` | Generate new fix scripts on-the-fly with syntax verification |
-| `patch_config_file()` | Patch `.env`, YAML, JSON in-place — no restart needed |
+| `ask_user_confirmation()` | Yes/no questions to admin via the orchestrator Matrix relay |
+| `run_self_healing_pipeline()` | Full diagnose→remediate→track workflow (remediation via orchestrator API) |
+| `run_full_remediation()` | Auto-remediation: known issues → allow-listed remediation → cross-worker → escalate |
+| `create_dynamic_fix_script()` | **DISABLED** for safety (no local write+exec) — escalate instead |
+| `patch_config_file()` | **Gated** — workspace-only, opt-in via `DOCTOR_ALLOW_CONFIG_PATCH` (defaults off) |
 | `invoke_worker_tool()` | Call tools from devops/qa/se/pm workers |
 | `list_docker_containers()` | Discover ALL containers & classify by role |
 | `get_container_inspect()` | Full `docker inspect` for any container |
@@ -132,16 +128,25 @@ Doctor (in container) ── GET /containers ──────────► O
 | `GET /containers` | List all containers + role classification |
 | `GET /containers/:name/logs` | Fetch logs from any container |
 
-#### Fix Scripts (`scripts/doctor-fixes/`)
+#### Remediation actions (orchestrator-mediated)
 
-| Script | Trigger |
-|--------|---------|
-| `restart_container.ps1` | Service returning 5xx |
-| `cleanup_docker.ps1` | Disk pressure |
-| `restart_docker.ps1` | Docker daemon unresponsive |
-| `check_disk_usage.ps1` | Disk alert |
-| `reset_network.ps1` | Network connectivity issues |
-| `restart_service.ps1` | Service unhealthy |
+The Doctor worker has **no Docker socket** and runs **no local scripts**. Fix
+execution goes through `POST /remediation` on the orchestrator, which performs a
+small, closed **allow-list** of actions via Dockerode — every call is audited and
+gated by RBAC (`remediation:execute`, doctor role only). `run_fix_script()` maps a
+fix name onto one of these actions:
+
+| Action | Trigger | Notes |
+|--------|---------|-------|
+| `restart_container` | Service unhealthy / returning 5xx / crashed | Worker containers only (`turing-worker=true` label); worker token OK |
+| `check_disk_usage` | Disk alert | Read-only `docker system df`; worker token OK |
+| `cleanup_docker` | Disk pressure | Prunes **dangling** images/volumes + unused networks only; requires `ADMIN_API_TOKEN` |
+
+There is intentionally **no arbitrary-command action** — unknown actions are
+rejected (HTTP 400). For safety, dynamic fix-script creation
+(`create_dynamic_fix_script`) is **disabled** (no local write+exec) and arbitrary
+config patching (`patch_config_file`) is **gated** (workspace-only, opt-in via
+`DOCTOR_ALLOW_CONFIG_PATCH`, defaults off).
 
 ### 6. Advanced Security & Orchestration Gateway (NEW)
 - **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Plane, BookStack, Matrix) is routed through the orchestrator.
@@ -176,17 +181,17 @@ See `.env.example` for the full list.
 | **Priority System** | ❌ None | ✅ P0-P3 with interrupt | ✅ Urgent requests handled |
 | **Idempotency** | ❌ None | ✅ Registry-based deduplication | ✅ No duplicates |
 | **Resource Scaling** | Manual | 🧪 Auto-scaling (experimental) | ✅ Dynamic (see caveats) |
-| **PM Failover** | ❌ None | 🧪 Doctor-managed | No SPOF (diagnosis works; restart relies on Doctor fix execution 🧪) |
+| **PM Failover** | ❌ None | 🧪 Doctor-managed | No SPOF (diagnosis works; restart via orchestrator `restart_container`, pending live verification) |
 | **Worker Health** | ❌ None | ✅ Health monitor + auto restart | ✅ Self-healing |
 | **Worker Checkpoint** | ❌ None | ✅ Doctor-first + checkpoint restore | ✅ No work loss |
 | **Timeout/Escalation** | Manual | 🧪 Auto timeout → escalate (partial) | Partially shipped |
-| **Bug Resolution** | User self-reports to GitHub | 🧪 Doctor agent → diagnose (fix execution roadmap) | Diagnosis works; automated fix 🗺️ |
+| **Bug Resolution** | User self-reports to GitHub | 🧪 Doctor agent → diagnose + orchestrator-mediated fix | Diagnosis + allow-listed remediation implemented; pending live verification |
 | **Communication** | Peer-to-peer (Matrix) | ✅ Bidirectional via Orchestrator | ✅ No deadlocks |
 | **Documentation** | Generic roles | ✅ Domain-specific JDs | ✅ Accurate skills |
 
 Legend: ✅ Shipped · 🧪 Experimental · 🗺️ Roadmap
 
-Current snapshot: Matrix HITL, worker health, priority routing, role loading, and BMAD workflow integration are **shipped** (✅). Doctor diagnostics, auto-scaling, PM failover, and timeout/escalation are **experimental** (🧪) — see the notes in the sections above. Full PO→PM→HR→Workers delegation at ticket intake, Doctor automated fix execution, and retro reports remain **roadmap** items (🗺️).
+Current snapshot: Matrix HITL, worker health, priority routing, role loading, and BMAD workflow integration are **shipped** (✅). Doctor diagnostics, auto-scaling, PM failover, and timeout/escalation are **experimental** (🧪) — see the notes in the sections above. Doctor's gateway-routed knowledge base / escalation and orchestrator-mediated fix execution (allow-listed `POST /remediation`) are **implemented and unit-tested but pending live-stack verification**. Full PO→PM→HR→Workers delegation at ticket intake and retro reports remain **roadmap** items (🗺️).
 
 ---
 
@@ -395,7 +400,6 @@ turing-os/
 │   ├── software-engineer.md
 │   └── languages/          # Tech stack skills
 ├── scripts/                # Orchestrator health, smoke tests, cron maintenance
-│   └── doctor-fixes/      # Self-healing PowerShell scripts (Doctor)
 ├── synapse/                # Matrix Synapse config
 ├── element_config/         # Element Web config
 ├── .github/                # Issue templates
@@ -451,8 +455,8 @@ docker compose logs -f turing-orchestrator
 |---------|-------|--------|
 | v1.0 | Core: Plane + Workers + PM + HR | ✅ Shipped |
 | v1.1 | Matrix bidirectional HITL + Worker Health + Flapping Detection | ✅ Shipped |
-| v1.2 | Security Gateway Proxy + RBAC | ✅ Shipped; Auto-scaling 🧪 experimental; Doctor diagnostics 🧪 (fix execution 🗺️) |
-| v1.3 | Doctor Dynamic Tools + Config Patching + Cross-Worker Invocation | 🧪 Tools registered; fix/patch execution not functional in the Linux image (🗺️ roadmap) |
+| v1.2 | Security Gateway Proxy + RBAC | ✅ Shipped; Auto-scaling 🧪 experimental; Doctor diagnostics 🧪 |
+| v1.3 | Doctor orchestrator-mediated remediation + gateway-routed KB/escalation | 🧪 Implemented + unit-tested via `/gateway/*` and `POST /remediation`; pending live-stack verification. Dynamic-script creation disabled, config patching gated for safety. |
 | v2.0 | PM failover (Doctor) + Timeout/Escalation hardening + Retro reports | In Progress (🧪/🗺️) |
 
 Legend: ✅ Shipped · 🧪 Experimental · 🗺️ Roadmap

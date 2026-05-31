@@ -11,14 +11,14 @@
  *               read straight from the singletons in renderMetrics().
  *
  * Label cardinality is kept intentionally low so the time-series count stays
- * bounded: service ∈ llm|plane|bookstack|matrix, statusClass ∈ 2xx|4xx|5xx.
+ * bounded: service ∈ llm|plane|bookstack|matrix|github, statusClass ∈ 2xx|4xx|5xx.
  */
 
 import type { WorkerRegistry } from './registry';
 import type { ActiveWorker } from './docker';
 import type { PriorityQueue } from './priority-queue';
 
-export type GatewayService = 'llm' | 'plane' | 'bookstack' | 'matrix';
+export type GatewayService = 'llm' | 'plane' | 'bookstack' | 'matrix' | 'github';
 export type StatusClass = '2xx' | '4xx' | '5xx';
 
 /** Worker statuses we surface as gauge series (mirrors ActiveWorker['status']). */

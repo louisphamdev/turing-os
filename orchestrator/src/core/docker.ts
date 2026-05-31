@@ -464,6 +464,142 @@ export class DockerService {
   }
 
   /**
+   * Restart a WORKER container by ticketId or container name (P4b remediation).
+   *
+   * SAFETY: this method ONLY ever touches containers carrying the
+   * `turing-worker=true` label. Infra containers (postgres/redis/synapse/plane/
+   * bookstack/orchestrator/…) are never labelled this way, so they cannot be
+   * matched — even if the caller passes their exact name. The label is
+   * re-verified on the resolved container before the restart, so there is no
+   * window in which a non-worker target slips through.
+   *
+   * `target` is matched (case-insensitively) against:
+   *   - the container's `ticket-id` label,
+   *   - the container's name (with or without a leading `/`).
+   *
+   * Includes stopped-but-not-yet-reaped workers (`all: true`) so a crashed
+   * worker can still be restarted. Uses Dockerode `getContainer(id).restart()`.
+   */
+  async restartWorkerContainer(target: string): Promise<{ ok: boolean; detail: string }> {
+    const wanted = (target || '').trim();
+    if (!wanted) {
+      return { ok: false, detail: 'No target specified' };
+    }
+
+    // Only worker-labelled containers are even candidates. Infra is invisible here.
+    const workers = await this.docker.listContainers({
+      filters: { label: ['turing-worker=true'] },
+      all: true,
+    });
+
+    const norm = (s: string) => s.replace(/^\//, '').toLowerCase();
+    const wantedLower = norm(wanted);
+
+    const match = workers.find((c) => {
+      const ticketId = (c.Labels?.['ticket-id'] || '').toLowerCase();
+      const names = (c.Names || []).map((n) => norm(n));
+      return ticketId === wantedLower || names.includes(wantedLower);
+    });
+
+    if (!match) {
+      return {
+        ok: false,
+        detail: `No worker container matched target "${wanted}". ` +
+          `Only containers labelled turing-worker=true (by ticket-id or name) can be restarted; ` +
+          `infra targets are rejected.`,
+      };
+    }
+
+    // Defence in depth: re-verify the label on the resolved container before acting.
+    if (match.Labels?.['turing-worker'] !== 'true') {
+      return { ok: false, detail: `Refusing to restart non-worker container "${wanted}"` };
+    }
+
+    const shortId = match.Id.substring(0, 12);
+    const ticketId = match.Labels?.['ticket-id'] || 'unknown';
+    await this.docker.getContainer(match.Id).restart();
+    return {
+      ok: true,
+      detail: `Restarted worker container ${shortId} (ticket: ${ticketId})`,
+    };
+  }
+
+  /**
+   * Read Docker disk usage (`docker system df` equivalent) via Dockerode `df()`.
+   * Read-only — safe for the doctor worker token. Returns a compact summary so
+   * the result can be audit-logged and returned over the remediation API.
+   */
+  async getDiskUsage(): Promise<{
+    images: { count: number; sizeBytes: number };
+    containers: { count: number; sizeBytes: number };
+    volumes: { count: number; sizeBytes: number };
+    buildCacheBytes: number;
+  }> {
+    const df: any = await this.docker.df();
+
+    const sum = (arr: any[] | undefined, field: string): number =>
+      (arr || []).reduce((acc, item) => acc + (Number(item?.[field]) || 0), 0);
+
+    const images = df?.Images || [];
+    const containers = df?.Containers || [];
+    const volumes = df?.Volumes || [];
+    const buildCache = df?.BuildCache || [];
+
+    return {
+      images: { count: images.length, sizeBytes: sum(images, 'Size') },
+      containers: { count: containers.length, sizeBytes: sum(containers, 'SizeRw') },
+      volumes: {
+        count: volumes.length,
+        // Volume size lives under UsageData.Size.
+        sizeBytes: (volumes as any[]).reduce(
+          (acc, v) => acc + (Number(v?.UsageData?.Size) || 0),
+          0,
+        ),
+      },
+      buildCacheBytes: sum(buildCache, 'Size'),
+    };
+  }
+
+  /**
+   * Prune ONLY DANGLING docker resources (P4b cleanup_docker).
+   *
+   * SCOPE (deliberately narrow): images with `dangling=true` (untagged layers),
+   * volumes with `dangling=true` (unreferenced), and unused networks. This does
+   * NOT run `docker system prune -a` and never removes tagged images or
+   * in-use volumes/containers. Because pruning is broad/irreversible, the
+   * remediation allow-list marks this action `requiresAdmin: true`.
+   */
+  async pruneDangling(): Promise<{
+    imagesDeleted: number;
+    imageSpaceReclaimed: number;
+    volumesDeleted: number;
+    volumeSpaceReclaimed: number;
+    networksDeleted: number;
+  }> {
+    // Filters are encoded as Docker's map[string][]string. We pass the
+    // dangling=true filter so ONLY untagged images / unreferenced volumes are
+    // removed — never tagged images or in-use volumes. The @types for
+    // pruneImages/pruneNetworks model options as `{}` (no filters field), so we
+    // pass the filter object through `as any`; dockerode forwards it verbatim.
+    const danglingFilter = { dangling: ['true'] };
+
+    // Dangling images only — never tagged images.
+    const imagePrune: any = await this.docker.pruneImages({ filters: danglingFilter } as any);
+    // Dangling (unreferenced) volumes only.
+    const volumePrune: any = await this.docker.pruneVolumes({ filters: danglingFilter });
+    // Unused networks (docker only removes networks no container is attached to).
+    const networkPrune: any = await this.docker.pruneNetworks();
+
+    return {
+      imagesDeleted: (imagePrune?.ImagesDeleted || []).length,
+      imageSpaceReclaimed: Number(imagePrune?.SpaceReclaimed) || 0,
+      volumesDeleted: (volumePrune?.VolumesDeleted || []).length,
+      volumeSpaceReclaimed: Number(volumePrune?.SpaceReclaimed) || 0,
+      networksDeleted: (networkPrune?.NetworksDeleted || []).length,
+    };
+  }
+
+  /**
    * List ALL containers (worker + infrastructure) — used by Doctor
    * to discover all containers for log inspection and diagnostics.
    */
