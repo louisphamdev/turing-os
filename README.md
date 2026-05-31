@@ -149,7 +149,7 @@ config patching (`patch_config_file`) is **gated** (workspace-only, opt-in via
 `DOCTOR_ALLOW_CONFIG_PATCH`, defaults off).
 
 ### 6. Advanced Security & Orchestration Gateway (NEW)
-- **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Plane, BookStack, Matrix) is routed through the orchestrator.
+- **Centralized Gateway Proxy**: All worker traffic to external services (LLM, Plane, BookStack, Matrix, GitHub) is routed through the orchestrator (e.g. `/gateway/github` is the GitHub egress proxy used for Doctor issue escalation).
 - **Credential Vault & Consumer Tokens**: Workers authenticate using short-lived JWT tokens rather than direct API keys.
 - **Role-Based Access Control (RBAC)**: Fine-grained permissions per role (e.g., `software-engineer` can write code, `qa` can only read).
 
@@ -162,7 +162,11 @@ The orchestrator now fails fast if any of these are missing or too short. Genera
 | `JWT_SECRET` | 32 chars | Signs worker consumer tokens |
 | `VAULT_MASTER_KEY` | 32 chars | AES-256-CBC key for the credential vault |
 | `ADMIN_API_TOKEN` | 16 chars | Bearer token for admin-only gateway endpoints (`/gateway/tokens`, `/gateway/credentials`, …) |
-| `GATEWAY_ENABLED` | — | Gateway is ON by default; set to `false` for legacy direct-key mode |
+
+> **Gateway-only — no direct-key mode.** The gateway is mandatory and always on:
+> the orchestrator mints a per-spawn consumer token for every worker and proxies
+> all external calls through it. The legacy `GATEWAY_ENABLED=false` direct-key
+> mode has been removed — workers never receive raw API keys.
 
 See `.env.example` for the full list.
 
@@ -250,6 +254,9 @@ The bundled gates are terse translations of the **superpowers** methodology by [
 | **Workers** | Ephemeral | Docker containers, auto-remove |
 | **Orchestrator** `/containers` | 3001 | Doctor container discovery API |
 | **Orchestrator** `/containers/:name/logs` | 3001 | Container log retrieval for Doctor |
+| **Orchestrator** `GET /metrics` | 3001 | Prometheus text exposition (workers-by-status, queue depth, gateway request/error counters). **Unauthenticated by design** — firewall to an internal scraper |
+| **Orchestrator** `POST /remediation` | 3001 | Doctor allow-listed remediation (RBAC `remediation:execute`, doctor role only) |
+| **Orchestrator** `/gateway/github` | 3001 | GitHub egress proxy (Doctor issue escalation; consumer-token auth, no raw token in worker) |
 
 ### Communication Flow
 
@@ -382,6 +389,17 @@ To verify the stack is healthy:
 curl http://localhost:3001/health
 docker compose logs -f turing-orchestrator
 ```
+
+### 📈 Observability
+
+- **`GET /metrics`** — Prometheus text exposition exposing workers-by-status,
+  priority-queue depth, and gateway request/error counters. It is
+  **unauthenticated by design** (scrapers can't easily send a bearer token), so
+  firewall it to an internal scraper / network — never expose it publicly.
+- **Structured JSON logging** — the orchestrator emits one JSON line per event
+  with level gating via `LOG_LEVEL` (default `info`) and automatic secret
+  redaction. A request-logging middleware sets/propagates an `X-Request-Id`
+  header so a request can be correlated end-to-end across logs.
 
 ---
 

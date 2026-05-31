@@ -16,12 +16,21 @@ orchestrator **gateway**, which enforces RBAC and injects credentials. State
 
 ### Orchestrator (`orchestrator/`, TypeScript / Express, port `3001`)
 - Spawns ephemeral worker containers via Dockerode (auto-remove).
-- **Gateway proxy** for all worker egress (LLM, Plane, BookStack, Matrix).
+- **Gateway proxy** for all worker egress (LLM, Plane, BookStack, Matrix, GitHub
+  — `/gateway/github` is the GitHub egress proxy for Doctor escalation).
 - **RBAC** enforced on every proxied request.
 - **Priority queue** (P0–P3) with P0 interrupt.
 - **Health monitor**: heartbeat + flapping detection, checkpoint-based recovery.
 - **Matrix relay**: bidirectional admin ↔ worker (per-worker rooms), admin
   slash-commands, structured-message injection.
+- **Key endpoints**: `GET /metrics` (Prometheus exposition — workers-by-status,
+  queue depth, gateway request/error counters; **unauthenticated by design,
+  firewall to an internal scraper**), `POST /remediation` (Doctor allow-listed
+  remediation, RBAC `remediation:execute`, **doctor role only**),
+  `/gateway/github` (GitHub egress proxy).
+- **Observability**: structured JSON logging with level gating via `LOG_LEVEL`
+  (default `info`) + secret redaction, and an `X-Request-Id` request-correlation
+  middleware. Metrics via `GET /metrics`.
 
 ### Worker (`base-worker/`, Python ReAct loop "Hermes")
 - Agent loop in `base-worker/src/agent/hermes_loop.py`.
@@ -92,7 +101,10 @@ cp .env.example .env && docker compose -f docker-compose.yml config
 - `JWT_SECRET` (≥32 chars) — signs worker consumer tokens.
 - `VAULT_MASTER_KEY` (≥32 chars) — AES-256-GCM key for the credential vault.
 - `ADMIN_API_TOKEN` (≥16 chars) — bearer for admin-only gateway endpoints.
-- `GATEWAY_ENABLED` — gateway is ON by default; `false` = legacy direct-key mode.
+
+The gateway is **mandatory / always on** — every worker gets a per-spawn consumer
+token and all egress is proxied. The legacy `GATEWAY_ENABLED=false` direct-key
+mode has been removed; there is no direct-key path.
 
 ## Key files map
 
@@ -138,11 +150,14 @@ Roles: `software-engineer`, `qa`, `devops`, `data`, `security`, `hr`, `pm`,
 - Credential vault (AES-256-GCM).
 
 ### 🧪 Experimental
-- **Doctor self-healing** — diagnostics + container relay work; automated **fix
-  execution** is roadmap (PowerShell `.ps1` scripts not Linux-ready,
-  BookStack/GitHub paths not gateway-wired).
-- **Auto-scaling** — logic present; scale-up capped per role, scale-down victim
-  selection is naive (stops oldest, not idlest).
+- **Doctor self-healing** — diagnostics + container relay work; knowledge base /
+  GitHub escalation / Matrix confirmation are gateway/relay-routed, and **fix
+  execution is orchestrator-mediated** (`POST /remediation`, allow-listed actions
+  via Dockerode; `create_dynamic_fix_script` disabled, `patch_config_file` gated).
+  Implemented + unit-tested but **pending live-stack verification**.
+- **Auto-scaling** — scale-down now stops the most-idle worker and respects
+  `MIN_WORKERS`; scale-up is still capped to one worker per auto-start role. Not
+  yet exercised under real load.
 
 ### 🗺️ Roadmap
 - PO→PM→HR delegation at ticket intake (the Plane webhook currently spawns one
